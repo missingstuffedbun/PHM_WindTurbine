@@ -1,0 +1,99 @@
+# 数据路径
+paths:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  results_dir: "results"
+  model_dir: "results/models"
+  metrics_dir: "results/metrics"
+  figures_dir: "results/figures"
+
+# 数据预处理
+preprocessing:
+  target_signals:
+    - "TMBNS"
+    - "TMBEW"
+    - "TMBTOR"
+
+  window_size: 100
+  stride: 10
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+# 稀疏监测场景
+scenarios:
+  s0_full:
+    name: "full_monitoring"
+    description: "所有选定传感器可用"
+    observable_ratio: 1.0
+
+  s1_medium:
+    name: "medium_sparse"
+    description: "中等程度稀疏，减少部分结构监测信息"
+    observable_ratio: 0.7
+
+  s2_severe:
+    name: "severe_sparse"
+    description: "严重稀疏，进一步减少结构监测信息"
+    observable_ratio: 0.4
+
+  s3_tower_failure:
+    name: "tower_sensor_failure"
+    description: "塔底结构传感器失效"
+    blocked_signals:
+      - "TMBNS"
+      - "TMBEW"
+      - "TMBTOR"
+
+  s4_nacelle_failure:
+    name: "nacelle_sensor_failure"
+    description: "机舱传感器失效"
+    blocked_signals:
+      - "NAX1"
+      - "NAX2"
+      - "NAY1"
+      - "NAY2"
+      - "NAZ1"
+      - "NAZ2"
+
+  s5_rotor_failure:
+    name: "rotor_sensor_failure"
+    description: "转子传感器失效"
+    blocked_signals:
+      - "XTurbSpeed1"
+      - "TurbSpeed2"
+      - "RST2"
+
+# 模型配置
+model:
+  backbone: "lstm"  # 可选: lstm, transformer, gnn, mlp
+  use_pinn: false   # 是否启用物理约束
+  input_dim: 37
+  output_dim: 3
+  hidden_dim: 128
+  num_layers: 3
+  dropout: 0.1
+
+# 训练配置
+training:
+  batch_size: 64
+  epochs: 100
+  lr: 0.001
+  weight_decay: 0.0001
+  early_stopping_patience: 10
+  device: "cpu"  # 可选: cuda, cpu
+
+# 损失函数权重
+loss:
+  data_weight: 1.0
+  physics_weight: 0.1
+
+# 评价指标
+metrics:
+  - "rmse"
+  - "mae"
+  - "mape"
+  - "r2"
+
+# 随机种子
+seed: 42
