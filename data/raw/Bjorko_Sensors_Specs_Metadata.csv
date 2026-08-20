@@ -1,0 +1,70 @@
+,Internal Signal Name,Unit,IEC 61400-25 Guideline Name,ENTR Alliance name,Description of Signal Name,Notes,Reduction,Reliable Measurement
+0,Time,s ,,,"Timestamps. The number of seconds elapsed since 12:00 a.m., Friday, January 1, 1904, Universal Time. ",,FIRST,TRUE
+1,GenTorqSP,Nm ,WGEN.DmdTorqStp,,Generator Torque SetPoint ,,FIRST,TRUE
+2,DCCREF,A ,,,DC Current REFerence (=Setpoint) ,,FIRST,TRUE
+3,PA_B1_SP,deg ,,,Pitch Angle SetPoint Blade 1. All blades have the same setpoint.,,FIRST,TRUE
+4,YS,% ,,,Yaw Speed Hydraulic valve setpoint ,,FIRST,TRUE
+5,YDL,% ,,,Yaw Damping Left valve setpoint ,,FIRST,TRUE
+6,YDR,% ,,,Yaw Damping Right valve setpoint ,,FIRST,TRUE
+7,Dig_IO_States,none ,,,Digital I/O States. Boolean values combined into a number.,See separate table  of States,FIRST,TRUE
+8,SysMode,enum ,,,"Wind turbine controller Mode. e.g.: Stopped, Running",See separate table of Modes,FIRST,TRUE
+9,DCC,A ,,,DC Current from generator rectifier ,,MEAN,TRUE
+10,DCV,V ,,,DC Voltage from generator rectifier ,,MEAN,TRUE
+11,XTurbSpeed1,rpm ,,,Rotor Speed sensor 1. 20 000 pulses/turn,LP-filtered,MEAN,TRUE
+12,TurbSpeed2,rpm ,,,Rotor Speed sensor 2. 30 pulses/turn,,MEAN,TRUE
+13,B1Pos,deg ,,,Blade 1 Position. Zero when blade 1 is straight up.,Increasing 0 -360 at forward rotation,FIRST,TRUE
+14,GTEMP1,deg C ,,,Generator TEMPerature sensor 1 ,Bearing? Cooling? Cable?,MEAN,TRUE
+15,GTEMP4,deg C ,,,Generator TEMPerature sensor 4 ,,MEAN,TRUE
+16,AIRTN,deg C ,,,"AIR Temperature, Nacelle ",Inside or Outside Nacelle?,MEAN,TRUE
+17,HOP,bar ,WYAW.HyPres,WYAW.HyPres,Hydraulic Oil Pressure ,,MEAN,TRUE
+18,HYMP1,bar ,WYAW.HyPres1,,HYdraulic Motor Pressure 1. Sensor on each side of the Yaw Motor.,Old sensor. Unreliable? ,MEAN,FALSE
+19,HYMP2,bar ,WYAW.HyPres2,,HYdraulic Motor Pressure 2. Sensor on each side of the Yaw Motor.,Old sensor. Unreliable? ,MEAN,FALSE
+20,NAX1,m/s2 ,,,Nacelle Accelerometer X direction 1. Accelerometer 1 is in front.,  All accelerometer directions are relative to nacelle.,MEAN,TRUE
+21,NAX2,m/s2 ,,,Nacelle Accelerometer X direction 2. X is axial (turbine shaft) dir. + is towards stern.,  All accelerometer directions are relative to nacelle.,MEAN,TRUE
+22,NAY1,m/s2 ,,,Nacelle Accelerometer Y direction 1. Y is sideways. + is towards Starboard.,  All accelerometer directions are relative to nacelle. Repaired 2021-05-18.,MEAN,TRUE
+23,NAY2,m/s2 ,,,Nacelle Accelerometer Y direction 2. Accelerometer 2 is mounted in rear part.,,MEAN,TRUE
+24,NAZ1,m/s2 ,,,"Nacelle Accelerometer Z direction 1. Z is ""vertical"". + is upwards.",Note the 5 deg tilt of the nacelle.,MEAN,TRUE
+25,NAZ2,m/s2 ,,,Nacelle Accelerometer Z direction 2 ,,MEAN,TRUE
+26,YP,deg ,WYAW.YwAng,WYAW.YwAng,Yaw Position 0 - (5 * 360) deg. YS MOD 360 equals compass direction.,,FIRST,TRUE
+27,WDNA,deg ,WMET.HorWdDirRel,WMET.HorWdDirRel,Wind Direction relative to nacelle. Analog Windvane. 180 deg when turbine is aligned to wind.,,FIRST,TRUE
+28,AIRHNA,rel % ,WMET.EnvHum,WMET.EnvHum,AIR Humidity Nacelle measured with IR sensor,,MEAN,TRUE
+29,BRDTEMP,deg C ,WTRM.ShftBrkTmp,WTRM.ShftBrkTmp,Brake Disc TEMPerature ,,MEAN,TRUE
+30,PAB1,deg ,WROT.BlPthAngVal1,WROT.BlPthAngVal1,Pitch Angle Blade 1 ,,MEAN,TRUE
+31,PAB2,deg ,WROT.BlPthAngVal2,WROT.BlPthAngVal2,Pitch Angle Blade 2 ,,MEAN,TRUE
+32,PAB3,deg ,WROT.BlPthAngVal3,WROT.BlPthAngVal3,Pitch Angle Blade 3 ,,MEAN,TRUE
+33,B1POS,V ,,,Blade 1 POSition measured with inductive sensors,Voltage from sector system,MEAN,TRUE
+34,B2POS,V ,,,Blade 2 POSition measured with inductive sensors,Voltage from sector system,MEAN,TRUE
+35,B3POS,V ,,,Blade 3 POSition measured with inductive sensors,Voltage from sector system,MEAN,TRUE
+36,R24VMON,V ,WROT.SupV,WROT.SupV,Rotating system 24V MONitor ,24V supply level in rot. Box,MEAN,TRUE
+37,AIRHH1,rel % ,,,AIR Humidity Hub 1 ,Sensor 1 of 3,MEAN,TRUE
+38,AIRTH1,deg C ,,,AIR Temperature Hub 1 ,Sensor 1 of 3,MEAN,TRUE
+39,RST2,Nm ,,,Rotor Shaft Torque ,Straingage RST2 on generator shaft,MEAN,TRUE
+40,B1EMR,V/V ,,,Blade 1 Edge Moment Root ,No calibration!,MEAN,FALSE
+41,B1FMR,V/V ,,,Blade 1 Flap Moment Root ,No calibration!,MEAN,FALSE
+42,B2EMR,V/V ,,,Blade 2 Edge Moment Root ,No calibration!,MEAN,FALSE
+43,B2FMR,V/V ,,,Blade 2 Flap Moment Root ,No calibration!,MEAN,FALSE
+44,B3EMR,V/V ,,,Blade 3 Edge Moment Root ,No calibration!,MEAN,FALSE
+45,B3FMR,V/V ,,,Blade 3 Flap Moment Root ,No calibration!,MEAN,FALSE
+46,B1FM20A,V/V ,,,Blade 1 Flap Moment 2.0 meter a Upwind ,No calibration!,MEAN,FALSE
+47,B1FM20B,V/V ,,,Blade 1 Flap Moment 2.0 meter b Downwind ,No calibration!,MEAN,FALSE
+48,B1FM35A,V/V ,,,Blade 1 Flap Moment 3.5 meter a Upwind ,No calibration!,MEAN,FALSE
+49,B1FM35B,V/V ,,,Blade 1 Flap Moment 3.5 meter b Downwind ,No calibration!,MEAN,FALSE
+50,B1FM50A,V/V ,,,Blade 1 Flap Moment 5.0 meter a Upwind ,No calibration!,MEAN,FALSE
+51,B1FM50B,V/V ,,,Blade 1 Flap Moment 5.0 meter b Downwind ,No calibration!,MEAN,FALSE
+52,B2FM20A,V/V ,,,Blade 2 Flap Moment 2.0 meter a Upwind ,No calibration!,MEAN,FALSE
+53,B2FM20B,V/V ,,,Blade 2 Flap Moment 2.0 meter b Downwind ,No calibration!,MEAN,FALSE
+54,B2FM35A,V/V ,,,Blade 2 Flap Moment 3.5 meter a Upwind ,No calibration!,MEAN,FALSE
+55,TMBNS,Nm ,,,"Tower Moment, Base North-South ",,MEAN,TRUE
+56,TMBEW,Nm ,,,"Tower Moment, Base East-West ",,MEAN,TRUE
+57,WD30,deg ,,,Wind Direction 30 m height. Supersonic transducer in Meteorological mast.,10 Hz update frequency,FIRST,TRUE
+58,WS30,m/s ,,,"Wind Speed, 30 m height. Supersonic transducer in Meteorological mast.",10 Hz update frequency,MEAN,TRUE
+59,WDN,deg ,WMET.HorWdDirRel,WMET.HorWdDirRel,Wind Direction Nacelle. 180 deg when turbine is aligned to wind.,Relative to nacelle direction. Supersonic sensor,FIRST,TRUE
+60,WSN,m/s ,WMET.HorWdSpd,WMET.HorWdSpd,Wind Speed Nacelle ,Supersonic sensor,MEAN,TRUE
+61,PwrPercent,none ,,,â€¯Power Percentage. MaxPwrEst * PwrPercent = WantedPwr to Torque ctrl. ,Value between 0 and 1. 10 is added while FFR sequence is active,MEAN,TRUE
+62,TMBTOR,V/V ,,,Tower Moment Base TORsion ,Torsional straingage in steel base.,MEAN,TRUE
+63,OptRpm,rpm ,,,Optimal Rpm . Setpoint for turbine speed control (if engaged),FFR regulator calculated variable,MEAN,TRUE
+64,WindEst,m/s ,,,Wind Estimation ,FFR regulator calculated variable,MEAN,TRUE
+65,MaxPwrEst,W ,,,Max Power Estimation ,FFR regulator calculated variable,MEAN,TRUE
+66,Fgrid,Hz ,WCNV.GriHz,WCNV.GriHz,Grid Frequency. Affects Pwaste when activated,Measurement value,MEAN,TRUE
+67,Pwaste,W ,,,Waste Power. Calculated from Fgrid OR manually adjusted.,The amount of power to reduce turbine output with.,MEAN,TRUE
+68,Method_f,,,,"Freq.ctrl.method. 0 = Manually selected Pwaste, 1 = FCR-N, 2 = FCR-D_upp, 3 = FCR-D_ned",,MEAN,TRUE

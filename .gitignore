@@ -40,10 +40,7 @@ data/raw/*
 !data/raw/Bjorko_Sensors_Specs_Metadata.csv
 data/processed/*.csv
 data/processed/*.npz
-results/models/*.pt
-results/metrics/*.npz
-results/figures/*.png
-results/figures/*.pdf
+results/*
 
 # OS
 .DS_Store
