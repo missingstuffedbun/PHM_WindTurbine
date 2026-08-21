@@ -1,5 +1,5 @@
 import argparse
-import copy
+import os
 import subprocess
 import sys
 
@@ -33,6 +33,11 @@ def run_single(config_path, scenario, backbone, use_pinn):
         "--config", tmp_config_path,
         "--scenario", scenario,
     ])
+
+    # 实验结束后删除临时配置文件
+    if os.path.exists(tmp_config_path):
+        os.remove(tmp_config_path)
+        print(f"Removed temp config: {tmp_config_path}")
 
 
 def main(config_path, scenarios, backbones, compare_pinn):

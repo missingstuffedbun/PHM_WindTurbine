@@ -29,10 +29,13 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
-def create_output_dir(base_dir):
-    """创建以当前时间戳命名的输出文件夹。"""
+def create_output_dir(base_dir, scenario_name, backbone, use_pinn):
+    """创建以时间戳+场景+backbone 命名的输出文件夹。"""
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    out_dir = os.path.join(base_dir, timestamp)
+    folder_name = f"{timestamp}_{scenario_name}_{backbone}"
+    if use_pinn:
+        folder_name += "_pinn"
+    out_dir = os.path.join(base_dir, folder_name)
     os.makedirs(out_dir, exist_ok=True)
     return out_dir
 
@@ -103,8 +106,12 @@ def main(config_path, scenario_name):
     device = torch.device(config["training"]["device"] if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    # 模型类型
+    backbone = config["model"]["backbone"]
+    is_pinn = config["model"].get("use_pinn", False)
+
     # 创建本次运行的输出目录
-    out_dir = create_output_dir(config["paths"]["results_dir"])
+    out_dir = create_output_dir(config["paths"]["results_dir"], scenario_name, backbone, is_pinn)
     print(f"Output directory: {out_dir}")
 
     # 保存本次运行的配置文件
@@ -136,14 +143,13 @@ def main(config_path, scenario_name):
     test_loader = DataLoader(test_set, batch_size=config["training"]["batch_size"])
 
     # 构建模型：相同 backbone，可选是否加入物理约束
-    is_pinn = config["model"].get("use_pinn", False)
     if is_pinn:
         model = PINNWrapper(config).to(device)
         model.feature_names = dataset.feature_cols
-        print(f"Model: {config['model']['backbone']} + PINN")
+        print(f"Model: {backbone} + PINN")
     else:
         model = build_model(config).to(device)
-        print(f"Model: {config['model']['backbone']} (baseline)")
+        print(f"Model: {backbone} (baseline)")
 
     optimizer = torch.optim.Adam(
         model.parameters(),
