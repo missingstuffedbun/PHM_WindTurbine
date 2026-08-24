@@ -66,7 +66,7 @@ scenarios:
 
 # 模型配置
 model:
-  backbone: "lstm"  # 可选: lstm, transformer, gnn, mlp
+  backbone: "lstm"  # 可选: lstm, transformer, mlp
   use_pinn: false   # 是否启用物理约束
   input_dim: 37
   output_dim: 3
@@ -86,7 +86,8 @@ training:
 # 损失函数权重
 loss:
   data_weight: 1.0
-  physics_weight: 0.1
+  physics_weight: 0.5       # 自适应：实际权重会随 data_loss/phys_loss 动态缩放
+  adaptive_physics: true    # true=数据越充足物理约束自动退场，避免干扰已拟合模型
 
 # 评价指标
 metrics:

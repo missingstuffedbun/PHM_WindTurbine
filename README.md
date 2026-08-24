@@ -1,33 +1,90 @@
 # PHM_WindTurbine
 
-WindTurbine_Sparse_SHM/
+基于稀疏传感与物理约束的风机塔架结构健康监测项目。
+
+## 文件结构
+
+```
+PHM_WindTurbine/
 │
 ├── README.md
-├── config.yaml
-├── main.py                 # 训练入口
+├── config.yaml            # 实验参数（数据预处理、场景、模型、训练、损失）
+├── main.py                # 单次训练入口，接受 --config / --scenario
+├── run_experiments.py     # 批量对比实验脚本（6 场景 × 4 backbone × baseline/PINN = 48 次）
 │
 ├── data/
-│   ├── raw/                # 原始 Björkö 数据
-│   ├── processed/          # 清洗、归一化、加窗后的数据
-│   └── dataset.py          # PyTorch Dataset / DataLoader
+│   ├── raw/               # 原始 Björkö 风机数据
+│   ├── processed/         # 清洗 + 标准化后的 processed.csv 与 scaler.npz
+│   └── dataset.py         # WindTurbineDataset（加窗 + 场景 mask）/ split_dataset
 │
 ├── preprocessing/
-│   ├── clean.py            # 数据清洗
-│   ├── normalize.py        # 归一化
-│   ├── window.py           # 时间窗口构造
-│   └── mask.py             # 稀疏/失效场景构造
+│   └── prepare_data.py    # 数据清洗、归一化、加窗、场景 mask 构造
 │
 ├── models/
-│   ├── base.py             # 数据驱动基线（LSTM / Transformer / GNN 等）
-│   ├── pinn.py             # 物理约束模型
-│   └── physics.py          # 物理约束定义
+│   ├── base.py            # 数据驱动 backbone：LSTMModel / TransformerModel / MLPModel / build_model
+│   ├── pinn.py            # PINNWrapper：包装任意 backbone，compute_loss 返回 data_loss + physics_loss
+│   └── physics.py         # 物理约束残差定义
 │
 ├── utils/
-│   ├── metrics.py          # 评价指标
-│   └── visualize.py        # 结果可视化
+│   ├── metrics.py         # RMSE / MAE / R² / SMAPE，分目标变量评价
+│   └── visualize.py       # 预测对比图、散点图、误差分布图
 │
-└── results/
-    ├── models/             # 保存模型权重
-    ├── metrics/            # 保存评价结果
-    └── figures/            # 保存可视化图片
+└── results/               # 每次运行一个独立文件夹：{时间戳}_{场景}_{backbone}[_pinn]/
+    └── <run_name>/
+        ├── config.yaml    # 本次运行的完整配置副本
+        ├── best_model.pt  # 验证集最优模型权重
+        ├── results.npz    # y_true / y_pred
+        ├── metrics.yaml   # 总体 + 分目标指标
+        └── *.png          # 3 张可视化图
+```
 
+## 代码内容
+
+### `preprocessing/prepare_data.py`
+读取原始数据，按 metadata 过滤不可靠信号，清洗、标准化，输出 `data/processed/processed.csv` 与 `data/processed/scaler.npz`。
+
+### `data/dataset.py`
+- `WindTurbineDataset`：按 `window_size` / `stride` 滑动加窗，每个窗口预测最后一个时间步的塔底响应（TMBNS / TMBEW / TMBTOR）；在 `__getitem__` 中根据场景配置动态对失效通道置零（稀疏/故障 mask）。
+- `split_dataset`：按时间顺序前向切分训练 / 验证 / 测试集（默认 70% / 15% / 15%）。
+
+### `models/base.py`
+三种数据驱动 backbone，统一接口 `forward(x) -> (batch, 3)`：
+- `LSTMModel`：LSTM 取最后时间步输出。
+- `TransformerModel`：Transformer 编码器 + 线性投影。
+- `MLPModel`：取窗口最后时间步的 MLP。
+- `build_model(config)`：按 `config["model"]["backbone"]` 构建对应模型。
+
+### `models/physics.py`
+`physics_loss(pred, inputs, feature_names, target_names)`：基于真实物理关系的软一致性残差——塔底弯矩幅值与机舱加速度幅值一致、塔底扭矩与转子/发电机转速一致；被 mask 的驱动信号自动跳过。
+
+### `models/pinn.py`
+`PINNWrapper`：包裹任意 backbone（通过 `build_model`），`compute_loss` 返回 `(data_loss, physics_loss)`，供训练时与数据损失联合优化。
+
+### `utils/metrics.py`
+`compute_metrics(y_true, y_pred, target_names)`：计算 RMSE / MAE / MAPE / SMAPE / R² 的总体指标及每个目标变量分项。
+
+### `utils/visualize.py`
+`plot_predictions` / `plot_scatter` / `plot_error_distribution`：分别绘制预测-真值对比、散点图、误差分布图并保存到输出目录。
+
+### `main.py`
+单次训练入口：
+- 读取 config，按 `--scenario` 加载场景，构建数据集与模型（baseline 或 `PINNWrapper`）；
+- 训练循环含早停（`early_stopping_patience`），以验证集损失选最优模型；
+- 测试阶段评估并保存 `results.npz`、`metrics.yaml` 与 3 张可视化图到带时间戳的输出目录；
+- `effective_physics_weight`：自适应物理权重（数据越充足物理约束自动退场）。
+
+### `run_experiments.py`
+批量实验脚本：遍历 6 个场景 × 3 种 backbone × baseline/PINN，为每次实验生成临时 `tmp_config_*.yaml` 并调用 `main.py`，运行结束后自动删除临时文件。
+
+## 使用方式
+
+```bash
+# 数据预处理
+python preprocessing/prepare_data.py
+
+# 单次训练（backbone 与 PINN 开关由 config.yaml 的 model 段控制）
+python main.py --scenario s0_full
+
+# 批量对比实验（36 次）
+python run_experiments.py --compare_pinn
+```

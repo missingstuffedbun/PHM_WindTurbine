@@ -40,11 +40,30 @@ def create_output_dir(base_dir, scenario_name, backbone, use_pinn):
     return out_dir
 
 
+def effective_physics_weight(data_loss, phys_loss, config):
+    """自适应物理约束权重。
+
+    物理项只在“数据不足 / 数据损失较大”时才应主导，数据已拟合良好时
+    应自动退场，避免干扰已经收敛的 baseline（这是之前 PINN 在 s0/s4/s5
+    反而变差的根因）。
+
+    公式： w_eff = physics_weight * data_loss / (phys_loss + eps)
+    含义：让物理损失项在数据损失尺度上与之可比；数据损失越小，w_eff 越小。
+    上限钳制避免 phys_loss≈0 时权重爆炸。
+    """
+    physics_weight = float(config["loss"]["physics_weight"])
+    if not config["loss"].get("adaptive_physics", True):
+        return torch.tensor(physics_weight)
+    eps = 1e-8
+    ratio = data_loss.detach() / (phys_loss.detach() + eps)
+    w_eff = (physics_weight * ratio).clamp(max=1.0)
+    return w_eff
+
+
 def train_epoch(model, loader, optimizer, config, is_pinn=False):
     model.train()
     total_loss = 0.0
     data_weight = config["loss"]["data_weight"]
-    physics_weight = config["loss"]["physics_weight"]
 
     for x, y in loader:
         x, y = x.to(device), y.to(device)
@@ -53,7 +72,8 @@ def train_epoch(model, loader, optimizer, config, is_pinn=False):
         if is_pinn:
             y_pred = model(x)
             data_loss, phys_loss = model.compute_loss(x, y_pred, y)
-            loss = data_weight * data_loss + physics_weight * phys_loss
+            w_eff = effective_physics_weight(data_loss, phys_loss, config)
+            loss = data_weight * data_loss + w_eff * phys_loss
         else:
             y_pred = model(x)
             loss = torch.nn.MSELoss()(y_pred, y)
@@ -71,7 +91,6 @@ def evaluate(model, loader, config, target_names, is_pinn=False):
     all_pred = []
     total_loss = 0.0
     data_weight = config["loss"]["data_weight"]
-    physics_weight = config["loss"]["physics_weight"]
 
     with torch.no_grad():
         for x, y in loader:
@@ -80,7 +99,8 @@ def evaluate(model, loader, config, target_names, is_pinn=False):
             if is_pinn:
                 y_pred = model(x)
                 data_loss, phys_loss = model.compute_loss(x, y_pred, y)
-                loss = data_weight * data_loss + physics_weight * phys_loss
+                w_eff = effective_physics_weight(data_loss, phys_loss, config)
+                loss = data_weight * data_loss + w_eff * phys_loss
             else:
                 y_pred = model(x)
                 loss = torch.nn.MSELoss()(y_pred, y)
@@ -193,8 +213,14 @@ def main(config_path, scenario_name):
         y_pred=y_pred,
     )
 
+    # 将 numpy 标量转为原生 float，避免 yaml 写出 numpy 二进制标签导致难以解析
+    serializable_metrics = {
+        k: (float(v) if isinstance(v, (np.floating, np.integer, float, int)) else v)
+        for k, v in test_metrics.items()
+    }
+
     with open(os.path.join(out_dir, "metrics.yaml"), "w", encoding="utf-8") as f:
-        yaml.dump(test_metrics, f, allow_unicode=True, sort_keys=False)
+        yaml.safe_dump(serializable_metrics, f, allow_unicode=True, sort_keys=False)
 
     # 可视化
     plot_predictions(y_true, y_pred, target_signals, out_dir)

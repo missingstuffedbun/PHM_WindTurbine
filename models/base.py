@@ -37,37 +37,6 @@ class TransformerModel(nn.Module):
         return self.fc(out[:, -1, :])
 
 
-class GNNModel(nn.Module):
-    """简单时序 GNN 基线模型（将每个特征视为图节点）。"""
-
-    def __init__(self, input_dim, output_dim, hidden_dim=128, num_layers=3, dropout=0.1):
-        super().__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-
-        self.node_embed = nn.Linear(1, hidden_dim)
-        self.gnn_layers = nn.ModuleList([
-            nn.Linear(hidden_dim, hidden_dim) for _ in range(num_layers)
-        ])
-        self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(hidden_dim * input_dim, output_dim)
-
-    def forward(self, x):
-        # x: (batch, window, features)
-        # 取最后一个时间步，每个特征作为一个节点
-        x_last = x[:, -1, :].unsqueeze(-1)  # (batch, features, 1)
-        h = self.node_embed(x_last)  # (batch, features, hidden)
-
-        for layer in self.gnn_layers:
-            # 简单图卷积：每个节点聚合所有邻居均值
-            h_neigh = h.mean(dim=1, keepdim=True).expand(-1, h.size(1), -1)
-            h = torch.relu(layer(h + h_neigh))
-            h = self.dropout(h)
-
-        h = h.reshape(h.size(0), -1)
-        return self.fc(h)
-
-
 class MLPModel(nn.Module):
     """MLP 基线模型（取窗口最后一个时间步）。"""
 
@@ -103,9 +72,7 @@ def build_model(config):
         return LSTMModel(input_dim, output_dim, hidden_dim, num_layers, dropout)
     elif name == "transformer":
         return TransformerModel(input_dim, output_dim, hidden_dim, num_layers, dropout)
-    elif name == "gnn":
-        return GNNModel(input_dim, output_dim, hidden_dim, num_layers, dropout)
     elif name == "mlp":
         return MLPModel(input_dim, output_dim, hidden_dim, num_layers, dropout)
     else:
-        raise ValueError(f"Unknown backbone: {name}")
+        raise ValueError(f"Unknown backbone: {name}. Supported: lstm, transformer, mlp")

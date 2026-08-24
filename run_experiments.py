@@ -7,7 +7,7 @@ import yaml
 
 
 SCENARIOS = ["s0_full", "s1_medium", "s2_severe", "s3_tower_failure", "s4_nacelle_failure", "s5_rotor_failure"]
-BACKBONES = ["lstm", "transformer", "gnn", "mlp"]
+BACKBONES = ["lstm", "transformer", "mlp"]
 
 
 def run_single(config_path, scenario, backbone, use_pinn):
