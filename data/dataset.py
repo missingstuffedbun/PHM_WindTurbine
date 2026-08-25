@@ -34,18 +34,18 @@ class WindTurbineDataset(Dataset):
         return windows
 
     def _apply_scenario(self, x):
-        """根据场景 mask 输入中的部分信号。"""
-        x_masked = x.copy()
+        """根据场景 mask 输入中的部分信号。
 
-        # 随机比例稀疏
-        ratio = self.scenario.get("observable_ratio", 1.0)
-        if ratio < 1.0:
-            n_features = x_masked.shape[1]
-            n_keep = max(1, int(n_features * ratio))
-            keep_idx = np.random.choice(n_features, n_keep, replace=False)
-            mask = np.zeros(n_features, dtype=bool)
-            mask[keep_idx] = True
-            x_masked[:, ~mask] = 0.0
+        注意：目标信号（target_signals）是模型需要预测的输出，
+        即使在传感器失效场景下也不应作为输入暴露给模型，因此
+        它们始终被 mask。随机稀疏时，目标信号不计入可观测通道，
+        避免任务不可学习。
+        """
+        x_masked = x.copy()
+        n_features = x_masked.shape[1]
+
+        # 目标信号索引集合：这些信号永远不作为输入
+        protected_idx = set(self.target_indices)
 
         # 指定传感器失效
         blocked = self.scenario.get("blocked_signals", [])
@@ -53,6 +53,18 @@ class WindTurbineDataset(Dataset):
             if sig in self.feature_cols:
                 idx = self.feature_cols.index(sig)
                 x_masked[:, idx] = 0.0
+                protected_idx.add(idx)
+
+        # 随机比例稀疏：只在非目标、非 blocked 的输入特征中选择
+        ratio = self.scenario.get("observable_ratio", 1.0)
+        if ratio < 1.0:
+            candidate_idx = [i for i in range(n_features) if i not in protected_idx]
+            n_keep = max(1, int(len(candidate_idx) * ratio))
+            keep_idx = np.random.choice(candidate_idx, n_keep, replace=False)
+            mask = np.zeros(n_features, dtype=bool)
+            mask[keep_idx] = True
+            # 未保留的候选通道置零；目标/blocked 通道保持已 mask 状态
+            x_masked[:, ~mask] = 0.0
 
         return x_masked
 

@@ -8,9 +8,10 @@
 PHM_WindTurbine/
 │
 ├── README.md
-├── config.yaml            # 实验参数（数据预处理、场景、模型、训练、损失）
-├── main.py                # 单次训练入口，接受 --config / --scenario
-├── run_experiments.py     # 批量对比实验脚本（6 场景 × 4 backbone × baseline/PINN = 48 次）
+├── config.yaml            # 实验参数（数据预处理、场景名称列表、模型、训练、损失）
+├── config/
+│   └── scenarios.yaml     # 场景策略定义（observable_ratio / blocked_signals）
+├── main.py                # 训练入口，支持单场景或多场景批量实验，接受 --config / --scenario
 │
 ├── data/
 │   ├── raw/               # 原始 Björkö 风机数据
@@ -67,14 +68,13 @@ PHM_WindTurbine/
 `plot_predictions` / `plot_scatter` / `plot_error_distribution`：分别绘制预测-真值对比、散点图、误差分布图并保存到输出目录。
 
 ### `main.py`
-单次训练入口：
-- 读取 config，按 `--scenario` 加载场景，构建数据集与模型（baseline 或 `PINNWrapper`）；
+训练入口，支持单场景与多场景批量实验：
+- 读取 config，`--scenario` 可传入一个或多个场景；
+- `config.yaml` 中 `model.backbone` 和 `model.use_pinn` 支持单个值或列表，列表会自动展开为笛卡尔积组合；
 - 训练循环含早停（`early_stopping_patience`），以验证集损失选最优模型；
 - 测试阶段评估并保存 `results.npz`、`metrics.yaml` 与 3 张可视化图到带时间戳的输出目录；
+- 所有实验结果自动汇总到 `results/metrics_summary.csv`；
 - `effective_physics_weight`：自适应物理权重（数据越充足物理约束自动退场）。
-
-### `run_experiments.py`
-批量实验脚本：遍历 6 个场景 × 3 种 backbone × baseline/PINN，为每次实验生成临时 `tmp_config_*.yaml` 并调用 `main.py`，运行结束后自动删除临时文件。
 
 ## 使用方式
 
@@ -85,6 +85,9 @@ python preprocessing/prepare_data.py
 # 单次训练（backbone 与 PINN 开关由 config.yaml 的 model 段控制）
 python main.py --scenario s0_full
 
-# 批量对比实验（36 次）
-python run_experiments.py --compare_pinn
+# 多场景批量实验（config.yaml 中 backbone/use_pinn 可设为列表）
+python main.py --scenario s0_full s1_medium s2_severe s3_tower_failure s4_nacelle_failure s5_rotor_failure
+
+# 实验结果汇总
+# results/metrics_summary.csv
 ```

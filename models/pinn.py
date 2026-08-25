@@ -11,7 +11,7 @@ class PINNWrapper(nn.Module):
         super().__init__()
         self.backbone = build_model(config)
         self.target_names = config["preprocessing"]["target_signals"]
-        self.feature_names = None  # 在训练时从 dataset 传入
+        self.feature_names = []  # 在训练时从 dataset 传入
         self.phys_module = PhysicsConstraints()
 
     def forward(self, x):
