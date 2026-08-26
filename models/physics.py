@@ -69,10 +69,7 @@ def physics_loss(pred, inputs, feature_names, target_names, phys_module=None):
     # 1. 塔底弯矩幅值与机舱加速度幅值（惯性载荷）
     tmb_mag = torch.sqrt(pred_tmbns ** 2 + pred_tmbeq ** 2 + eps)
 
-    acc_x_cols = [c for c in ("NAX1", "NAX2") if c in feature_names]
-    acc_y_cols = [c for c in ("NAY1", "NAY2") if c in feature_names]
-    acc_z_cols = [c for c in ("NAZ1", "NAZ2") if c in feature_names]
-    acc_cols = acc_x_cols + acc_y_cols + acc_z_cols
+    acc_cols = [c for c in ("NAX1", "NAX2", "NAY1", "NAY2", "NAZ1", "NAZ2") if c in feature_names]
 
     if acc_cols:
         idxs = [feature_names.index(c) for c in acc_cols]
@@ -81,21 +78,6 @@ def physics_loss(pred, inputs, feature_names, target_names, phys_module=None):
         res = _physical_consistency(tmb_mag, phys_module.k_bending * acc_mag)
         if res is not None:
             loss = loss + res
-
-    # 2. 弯矩方向与加速度方向一致
-    if acc_x_cols:
-        idxs = [feature_names.index(c) for c in acc_x_cols]
-        acc_x = inputs[:, :, idxs].mean(dim=(1, 2))
-        res = _physical_consistency(pred_tmbns, acc_x)
-        if res is not None:
-            loss = loss + 0.5 * res
-
-    if acc_y_cols:
-        idxs = [feature_names.index(c) for c in acc_y_cols]
-        acc_y = inputs[:, :, idxs].mean(dim=(1, 2))
-        res = _physical_consistency(pred_tmbeq, acc_y)
-        if res is not None:
-            loss = loss + 0.5 * res
 
     # 3. 塔底扭矩与转子/发电机转速平方成正比（气动扭矩 ∝ ω²）
     rot_cols = [c for c in ("RST2", "TurbSpeed2", "XTurbSpeed1") if c in feature_names]

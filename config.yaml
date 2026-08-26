@@ -26,6 +26,9 @@ scenarios:
   - "s0_full"
   - "s1_medium"
   - "s2_severe"
+  - "s3_tower_failure"
+  - "s4_nacelle_failure"
+  - "s5_rotor_failure"
 
 # 模型配置
 # 支持单个值或列表；列表会自动展开为笛卡尔积组合进行批量实验。
