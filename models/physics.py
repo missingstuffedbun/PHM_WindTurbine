@@ -1,3 +1,13 @@
+"""物理约束（Physics Constraints）定义。
+
+本文件中的约束来自风机结构动力学关系，属于**物理约束**，不是数值正则：
+物理约束把已知物理规律以软残差形式注入训练，而对参数范数、输出平滑性的
+惩罚才是正则项（本项目由 `weight_decay` 与下文第 5 项时序平滑项承担）。
+
+理论依据：塔底弯矩与推力 / 倾覆力矩的平衡式 M_base ≈ T·h、其简化假设、
+量纲一致性推导与误差范围（稳态 ±20%，极端工况 30%–40%），见 `physics.md`。
+"""
+
 import torch
 import torch.nn as nn
 
@@ -46,16 +56,19 @@ def physics_loss(pred, inputs, feature_names, target_names, phys_module=None):
     2. 塔底弯矩南北/东西分量与机舱加速度同方向分量一致。
     3. 塔底扭矩与转子转速平方成正比（气动扭矩 ∝ ω²）。
     4. 塔底弯矩幅值与转速正相关（高转速 → 大弯矩）。
-    5. 预测时序平滑性约束（抑制非物理高频跳变）。
+    5. 预测时序平滑性约束（数值正则，抑制非物理高频跳变）。
 
     被 mask 的驱动信号（置零）会被 _physical_consistency 自动跳过，
-    因此约束是场景感知的：传感器失效越严重，物理项提供的正则越强，
+    因此约束是场景感知的：传感器失效越严重，物理约束的作用越强，
     数据充分时约束已近似满足，不干扰 baseline。
+
+    各项的物理来源与平衡式推导见 `physics.md`。
     """
     if phys_module is None:
         phys_module = PhysicsConstraints().to(pred.device)
 
-    loss = 0.0
+    # 初始化为 tensor，避免所有约束被跳过时返回 Python float
+    loss = torch.tensor(0.0, device=pred.device)
     eps = 1e-8
 
     tmbns_idx = target_names.index("TMBNS")

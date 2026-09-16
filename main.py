@@ -10,7 +10,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from data.dataset import WindTurbineDataset, split_dataset
+from data.dataset import build_split_datasets
 from models.base import build_model
 from models.pinn import PINNWrapper
 from utils.metrics import compute_metrics
@@ -57,6 +57,21 @@ def to_list(value):
     if isinstance(value, list):
         return value
     return [value]
+
+
+def check_or_set_dim(model_cfg, key, actual):
+    """模型维度以“数据推导值”为准：配置为 null 时自动填充，硬编码不一致则报错。
+
+    输入维度 = 输入通道数（目标信号不进输入），输出维度 = 目标信号数。
+    这样可避免把目标通道数进 input_dim 造成的维度错位 / 目标泄漏。
+    """
+    cfg_value = model_cfg.get(key)
+    if cfg_value is not None and int(cfg_value) != int(actual):
+        raise ValueError(
+            f"配置 model.{key}={cfg_value} 与数据推导值 {actual} 不一致。"
+            f"请将 model.{key} 设为 null 由数据自动推导，或修正为 {actual}。"
+        )
+    model_cfg[key] = int(actual)
 
 
 def create_experiment_root(base_dir, experiment_name=None):
@@ -171,22 +186,27 @@ def run_single_experiment(config, scenarios_dict, scenario_name, backbone, use_p
     scenario = scenarios_dict.get(scenario_name, {})
     print(f"Scenario description: {scenario.get('description', '')}")
 
-    # 构建数据集
+    # 构建数据集：先按时间切三段连续区间（相邻区间之间留隔离带），再各自滑窗
     data_path = os.path.join(config["paths"]["processed_dir"], "processed.csv")
     target_signals = config["preprocessing"]["target_signals"]
-    dataset = WindTurbineDataset(
+    train_set, val_set, test_set, split_bounds = build_split_datasets(
         data_path=data_path,
         window_size=config["preprocessing"]["window_size"],
         stride=config["preprocessing"]["stride"],
         target_signals=target_signals,
+        train_ratio=config["preprocessing"]["train_ratio"],
+        val_ratio=config["preprocessing"]["val_ratio"],
+        gap=config["preprocessing"].get("split_gap"),
         scenario=scenario,
+        seed=config["seed"],
+        missing_mode=config["preprocessing"].get("missing_mode", "raw_zero"),
+        missing_indicator=config["preprocessing"].get("missing_indicator", False),
     )
-
-    train_set, val_set, test_set = split_dataset(
-        dataset,
-        config["preprocessing"]["train_ratio"],
-        config["preprocessing"]["val_ratio"],
-    )
+    print(f"Split rows: {split_bounds} | windows: "
+          f"train={len(train_set)}, val={len(val_set)}, test={len(test_set)}")
+    print(f"Missing encoding: mode={train_set.missing_mode}, "
+          f"indicator={train_set.missing_indicator}, "
+          f"model_input_dim={train_set.model_input_dim}")
 
     train_loader = DataLoader(train_set, batch_size=config["training"]["batch_size"], shuffle=True)
     val_loader = DataLoader(val_set, batch_size=config["training"]["batch_size"])
@@ -198,13 +218,17 @@ def run_single_experiment(config, scenarios_dict, scenario_name, backbone, use_p
     run_config["model"]["backbone"] = backbone
     run_config["model"]["use_pinn"] = use_pinn
 
+    # 维度由数据推导（目标信号不进输入；开启 missing_indicator 时输入维度 ×2）
+    check_or_set_dim(run_config["model"], "input_dim", train_set.model_input_dim)
+    check_or_set_dim(run_config["model"], "output_dim", train_set.output_dim)
+
     if use_pinn:
         model = PINNWrapper(run_config).to(device)
-        model.feature_names = dataset.feature_cols
-        print(f"Model: {backbone} + PINN")
+        model.feature_names = train_set.input_cols
+        print(f"Model: {backbone} + PINN (input_dim={train_set.model_input_dim})")
     else:
         model = build_model(run_config).to(device)
-        print(f"Model: {backbone} (baseline)")
+        print(f"Model: {backbone} (baseline, input_dim={train_set.model_input_dim})")
 
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -302,8 +326,10 @@ def main(config_path, scenario_names, experiment_name=None):
     records = []
     fieldnames = [
         "timestamp", "scenario", "backbone", "use_pinn",
-        "overall_rmse", "overall_mae", "overall_mape", "overall_r2",
-        "TMBNS_rmse", "TMBEW_rmse", "TMBTOR_rmse",
+        "overall_rmse", "overall_mae", "overall_r2",
+        "TMBNS_rmse", "TMBNS_r2",
+        "TMBEW_rmse", "TMBEW_r2",
+        "TMBTOR_rmse", "TMBTOR_r2",
         "output_dir",
     ]
 
@@ -325,11 +351,13 @@ def main(config_path, scenario_names, experiment_name=None):
                     "use_pinn": use_pinn,
                     "overall_rmse": metrics.get("overall_rmse", ""),
                     "overall_mae": metrics.get("overall_mae", ""),
-                    "overall_mape": metrics.get("overall_mape", ""),
                     "overall_r2": metrics.get("overall_r2", ""),
                     "TMBNS_rmse": metrics.get("TMBNS_rmse", ""),
+                    "TMBNS_r2": metrics.get("TMBNS_r2", ""),
                     "TMBEW_rmse": metrics.get("TMBEW_rmse", ""),
+                    "TMBEW_r2": metrics.get("TMBEW_r2", ""),
                     "TMBTOR_rmse": metrics.get("TMBTOR_rmse", ""),
+                    "TMBTOR_r2": metrics.get("TMBTOR_r2", ""),
                     "output_dir": out_dir,
                 }
                 records.append(record)

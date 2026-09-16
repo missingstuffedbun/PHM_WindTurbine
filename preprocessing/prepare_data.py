@@ -16,11 +16,23 @@ def load_metadata(meta_path):
 
 
 def find_raw_csvs(raw_dir):
-    """查找 raw 目录下所有工况 CSV 文件。"""
+    """查找 raw 目录下所有工况 CSV 文件。
+
+    优先返回 20 Hz 文件（B1_CL4_20.csv），因为其数据量更大、时间覆盖更全。
+    """
     files = []
+    priority_file = None
     for f in os.listdir(raw_dir):
-        if f.endswith(".csv") and f != "Bjorko_Sensors_Specs_Metadata.csv":
-            files.append(os.path.join(raw_dir, f))
+        if not f.endswith(".csv") or f == "Bjorko_Sensors_Specs_Metadata.csv":
+            continue
+        fpath = os.path.join(raw_dir, f)
+        if f == "B1_CL4_20.csv":
+            priority_file = fpath
+        else:
+            files.append(fpath)
+
+    if priority_file:
+        return [priority_file] + files
     return files
 
 

@@ -1,32 +1,57 @@
 # 稀疏监测场景策略定义
-# 每个场景包含：name, description, observable_ratio, blocked_signals
+# 每个场景包含：name, description, observable_ratio, level, blocked_signals
+#
+# level（稀疏屏蔽层级，三选一，默认 channel）：
+#   channel  : 按通道随机屏蔽 —— 从候选通道中随机保留 observable_ratio 比例的通道，
+#              被屏蔽通道在整条时间轴上置零（测点未安装 / 长期失效）
+#   timestep : 按时间点屏蔽 —— 候选通道都在，但随机保留 observable_ratio 比例的时间步，
+#              被屏蔽时间步上所有候选通道同时置零（采样丢包 / 间歇采集）
+#   segment  : 按时间段整段置空 —— 候选通道在一段连续时间内全部置零，
+#              缺失长度 = (1 - observable_ratio) × window_size，起点随机（通信中断 / 停机）；
+#              可选 n_segments: K，将窗口均分为 K 段后随机置空其中连续的若干段
 
 s0_full:
   name: "full_monitoring"
   description: "所有选定传感器可用"
   observable_ratio: 1.0
+  level: channel
 
 s1_medium:
   name: "medium_sparse"
-  description: "中等程度稀疏，减少部分结构监测信息"
+  description: "中等程度稀疏，按通道随机减少部分结构监测信息"
   observable_ratio: 0.7
+  level: channel
 
 s2_severe:
   name: "severe_sparse"
-  description: "严重稀疏，进一步减少结构监测信息"
+  description: "严重稀疏，按通道随机进一步减少结构监测信息"
   observable_ratio: 0.4
+  level: channel
 
-s3_tower_failure:
-  name: "tower_sensor_failure"
-  description: "塔底结构传感器失效"
+# 注意：原 s3 屏蔽 TMBNS/TMBEW/TMBTOR（全是目标通道，目标本就不进输入），
+# 与 s0 在数据层面完全等价，已重定义为气象观测失效。
+# 该场景屏蔽的是**数据侧**通道，而当前物理约束的驱动通道是机舱加速度与转速/扭矩信号
+# （见 utils/analysis.py: CONSTRAINT_DRIVERS），不受影响 —— 因此 s3 与 s4（机舱失效，
+# 物理驱动同时失效）构成一组对照，可分离“数据信息损失”与“物理驱动失效”两种效应。
+s3_meteo_failure:
+  name: "meteo_sensor_failure"
+  description: "气象观测失效：风速/风向信号不可用（数据侧失效、物理驱动仍完好）"
+  observable_ratio: 1.0
+  level: channel
   blocked_signals:
-    - "TMBNS"
-    - "TMBEW"
-    - "TMBTOR"
+    - "WS30"
+    - "WD30"
+    - "WSN"
+    - "WDN"
 
-s4_nacelle_failure:
-  name: "nacelle_sensor_failure"
-  description: "机舱传感器失效"
+# 机舱**加速度**失效：YP（偏航位置）保留，故名称精确到 accelerometer 而非 nacelle。
+# 这 6 个通道正是物理约束 C1（机舱惯性 |M|↔加速度）的驱动通道，
+# 因此该场景同时代表“物理约束 1 的驱动失效”（见 utils/analysis.py: CONSTRAINT_DRIVERS）。
+s4_nacelle_accel_failure:
+  name: "nacelle_accelerometer_failure"
+  description: "机舱加速度失效：NAX/NAY/NAZ 不可用（YP 偏航位置保留）；物理约束 C1 驱动失效"
+  observable_ratio: 1.0
+  level: channel
   blocked_signals:
     - "NAX1"
     - "NAX2"
@@ -35,10 +60,33 @@ s4_nacelle_failure:
     - "NAZ1"
     - "NAZ2"
 
-s5_rotor_failure:
-  name: "rotor_sensor_failure"
-  description: "转子传感器失效"
+# 窄口径：只屏蔽传动链（转子/发电机转速 ×2 + 轴扭矩 ×1）。这 3 个通道正是物理约束
+# C3（气动扭矩 TMBTOR↔ω²）与 C4（推力代理 |M|↔ω）的驱动通道，故本场景 = “物理约束
+# 3/4 驱动失效”，与 S3（数据侧失效）、S4（C1 驱动失效）构成完整的因果对照。
+# 转子侧其余通道 PAB1-3（桨距角）、B1POS-3（叶片位置）属于气动状态信息，
+# 屏蔽它们会与 S1/S2 的随机稀疏语义重叠，故**不**并入本场景（原名 rotor 名实不符）。
+# 若确实需要“宽口径转子整体失效”，把 blocked_signals 换成下面 9 通道即可：
+#   [PAB1, PAB2, PAB3, B1POS, B2POS, B3POS, XTurbSpeed1, TurbSpeed2, RST2]
+s5_shaft_failure:
+  name: "shaft_sensor_failure"
+  description: "传动链失效：转速与轴扭矩不可用（物理约束 C3/C4 驱动失效）"
+  observable_ratio: 1.0
+  level: channel
   blocked_signals:
     - "XTurbSpeed1"
     - "TurbSpeed2"
     - "RST2"
+
+# 时间维度稀疏示例（按需取消注释，并把场景名加入 config.yaml 的 scenarios 列表）：
+# s6_packet_loss:
+#   name: "packet_loss"
+#   description: "采样丢包：候选通道随机缺失 30% 的时间点"
+#   observable_ratio: 0.7
+#   level: timestep
+#
+# s7_outage:
+#   name: "comm_outage"
+#   description: "通信中断：候选通道连续 30% 时间段整段置空"
+#   observable_ratio: 0.7
+#   level: segment
+#   # n_segments: 8        # 可选：窗口均分 8 段后随机置空其中连续的若干段

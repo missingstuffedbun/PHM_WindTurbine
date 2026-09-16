@@ -19,6 +19,22 @@ preprocessing:
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15
+  # 划分策略：先按时间顺序切成 train / val / test 三段**连续**区间，
+  # 相邻区间之间丢弃 split_gap 行作为隔离带（≥ window_size），再在各区间内独立滑窗；
+  # 不做窗口级随机打乱。stride(10) << window_size(100) 时窗口高度重叠，
+  # 若先滑窗再切分，训练段末尾窗口会与验证/测试段开头窗口共享原始数据，导致指标虚高。
+  split_gap: 100
+  # 缺失值编码语义（关键）：processed.csv 已整体标准化，因此“置零”的含义取决于模式。
+  # - raw_zero（默认）：缺失位置填入“原始域 0”对应的标准化值 (0 - mean) / scale，
+  #   等价于断线测点在原始域读到 0（测点未安装 / 通信中断的物理解释）；
+  #   对温度、转速、风速等测点，这是一个远离均值的哨兵值，不与真实读数混淆。
+  # - norm_zero：直接在标准化域置 0 —— 等价于填该通道**均值**，模型无法区分
+  #   “传感器缺失”和“读数恰好等于均值”，仅用于消融对照（复现旧行为）。
+  missing_mode: "raw_zero"
+  # 是否在每个输入通道后附加一条 missing-indicator 通道（1 = 该时刻该通道可见，0 = 缺失）。
+  # 开启后模型输入维度 ×2（34 → 68），缺失在任何数值编码下都严格可区分，工程上更标准；
+  # 关闭则只能靠哨兵值区分（原始均值本就接近 0 的通道会失效，代码会给出警告）。
+  missing_indicator: true
 
 # 稀疏监测场景
 # 场景策略定义在 config/scenarios.yaml 中，这里只需列出要运行的场景名称。
@@ -26,17 +42,20 @@ scenarios:
   - "s0_full"
   - "s1_medium"
   - "s2_severe"
-  - "s3_tower_failure"
-  - "s4_nacelle_failure"
-  - "s5_rotor_failure"
+  - "s3_meteo_failure"
+  - "s4_nacelle_accel_failure"
+  - "s5_shaft_failure"
 
 # 模型配置
 # 支持单个值或列表；列表会自动展开为笛卡尔积组合进行批量实验。
 model:
-  backbone: ["lstm", "transformer", "mlp"]  # 可选: lstm, transformer, mlp
+  backbone: ["lstm", "gru", "tcn", "transformer"]  # 可选: lstm, gru, tcn, transformer
   use_pinn: [false, true]                     # 是否启用物理约束
-  input_dim: 37
-  output_dim: 3
+  # 维度由数据集自动推导（null = 自动）：
+  # input_dim = 输入通道数（目标信号不进输入，本项目为 34）；output_dim = 目标信号数（3）。
+  # 若在此硬编码了与数据不一致的值，程序会直接报错而不是静默错位。
+  input_dim: null
+  output_dim: null
   hidden_dim: 128
   num_layers: 3
   dropout: 0.1
@@ -44,7 +63,7 @@ model:
 # 训练配置
 training:
   batch_size: 64
-  epochs: 100
+  epochs: 300
   lr: 0.001
   weight_decay: 0.0001
   early_stopping_patience: 10
@@ -64,4 +83,4 @@ metrics:
   - "r2"
 
 # 随机种子
-seed: 42
+seed: [42, 2026, 0916]
