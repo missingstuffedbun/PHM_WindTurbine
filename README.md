@@ -11,6 +11,7 @@ PHM_WindTurbine/
 ├── physics.md             # 物理约束说明：塔底弯矩-推力/倾覆力矩平衡式、简化假设、量纲推导、误差范围
 ├── config.yaml            # 训练参数（数据入口、场景名称列表、模型、训练、损失）
 ├── process.yaml           # 数据处理参数（选点、清洗、标准化；含 20 Hz / 100 Hz 两个版本）
+├── serve.yaml             # 推理服务配置：指定加载哪一份 best_model.pt（不做自动选优）
 ├── config/
 │   └── scenarios.yaml     # 场景策略定义（observable_ratio / level / blocked_signals）
 ├── main.py                # 训练入口，支持单场景或多场景批量实验，接受 --config / --scenario
@@ -39,6 +40,14 @@ PHM_WindTurbine/
 │   ├── metrics.py         # RMSE / MAE / R² / SMAPE，分目标变量评价
 │   ├── visualize.py       # 预测对比图、散点图、误差分布图
 │   └── analysis.py        # 实验结果汇总、物理约束增益与边界分析
+│
+├── serve/                 # 推理服务：把一份训练好的 best_model.pt 包装成 HTTP API
+│   ├── config.py          # serve.yaml 解析（权重由配置显式指定，不做选优）
+│   ├── registry.py        # 选优：按指标排序 + 定位 best_model.pt（无 serve.yaml 时回退用）
+│   ├── preprocess.py      # 推理侧输入构造（原始工程量纲 -> 模型输入张量）
+│   ├── predictor.py       # 加载权重并提供 predict()（纯 torch，无 Web 依赖）
+│   ├── server.py          # FastAPI 封装 + 启动入口
+│   └── client_example.py  # 冒烟测试客户端（仅用标准库）
 │
 └── results/               # 每次运行一个独立文件夹：{时间戳}_{场景}_{backbone}[_pinn]/
     └── <run_name>/
@@ -167,6 +176,75 @@ data:
 支撑上述分析的数据层：`collect_runs` 汇总 run（支持 `metrics.yaml` / `results.npz` 回退、多次重复实验聚合）、`build_gain_rows` 配对计算增益、`boundary_analysis` 求临界稀疏度、`negative_transfer` 负迁移归因、`build_report` 组装报表数据。
 `CONSTRAINT_DRIVERS` 定义了"每条物理约束依赖哪些输入通道"，供 `constraint_activity` 计算各场景下约束的驱动可用性（需与 `models/physics.py` 保持同步）。
 
+### `serve/`（模型服务）
+把一份训练好的 `best_model.pt` 包装成对外推理 API，输入**原始工程量纲**的采样点，输出塔底响应 `TMBNS / TMBEW / TMBTOR`（同时给出标准化域与原始物理量纲两套结果）。
+
+**加载哪一份权重由 `serve.yaml` 显式指定，服务不做任何自动选优**；`model` 段只写一条 `best_model.pt` 路径，其余（backbone / PINN / 场景 / seed）由该权重所在目录与实验 `config.yaml` 还原。参数优先级：命令行 > `serve.yaml` > 训练产物里的实验 `config.yaml` > 内置默认值：
+
+```yaml
+model:
+  checkpoint: results/20260916064037_100hz_full/s2_severe_transformer_pinn_seed2026/best_model.pt
+  config_file: null           # null = 从权重所在目录向上自动查找（.pt 被单独拷走时才需显式指定）
+
+data:                         # 输入数据契约：不满足 = 输入分布与训练不一致
+  processed_file: data/processed/B1_CL4_100/processed.csv   # 通道顺序 + scaler.npz 的来源
+  input_channels: [PAB1, PAB2, ... Pwaste]                  # 34 个，顺序即模型输入顺序
+  target_signals: [TMBNS, TMBEW, TMBTOR]
+  units: raw                  # 只接受原始工程量纲，不接受标准化后的 z 值
+  requirements:
+    scenario: s2_severe       # 与权重所在 run 的场景不一致时启动报错
+    observable_ratio: 0.4     # 典型可见通道比例（34 × 0.4 ≈ 14 路可见）
+    tolerance: 1.2            # 可见通道数偏离 ±20% 即判为分布不一致
+    blocked: []               # 训练时永久失效的通道（传了值也按缺失处理）
+    on_violation: warn        # warn = 结果带 warnings；reject = 直接 400
+
+preprocessing:                # 必须与训练一致，启动时与实验 config.yaml 核对
+  strict: true                # 不一致时直接退出（false 只告警，结果不可与离线指标对照）
+  window_size: 100
+  missing_mode: raw_zero
+  missing_indicator: true
+
+server:
+  host: 127.0.0.1
+  port: 8000
+  device: null                # null = 自动（cuda 可用则用 cuda）
+```
+
+启动时会做三件核对，任一不通过直接退出：**①** `preprocessing` 与实验 `config.yaml` 是否一致；**②** `data.input_channels` / `target_signals` 与 `processed.csv` 推导出的通道是否一致；**③** `data.requirements`（场景、可见比例、失效通道）与该 run 的训练场景是否一致。运行期每个请求再按 `requirements` 校验：可见通道数是否接近 `observable_ratio × 通道数`（偏离超 `tolerance` 倍即告警，或 `on_violation: reject` 时返回 400），请求里出现未知通道名也会告警。`/schema` 会原样返回这些要求。
+
+命令行可临时覆盖配置而不动文件：`--checkpoint` / `--run-dir`（等价于该目录下的 `best_model.pt`）/ `--processed-file` / `--host` / `--port` / `--device`。
+
+> 权重与当前代码版本不一致时的兼容处理：`PhysicsConstraints` 已移除 `k_bending` / `k_torsion`
+> 两个不可辨识的可学习参数（`models/physics.py` 文件头第 4 条），旧权重里的这两个键会在加载时
+> 被丢弃并打印告警；它们不参与推理期计算，不影响输出。其它任何键不匹配都会直接报错。
+
+**只有没有 `serve.yaml` 时才退回按指标选优**（`serve/registry.py`，默认 `metric=overall_rmse`、`aggregate=mean`）：
+
+1. 只考虑含 `best_model.pt` 的 run（未跑完的直接排除）；
+2. 按 `(scenario, backbone, use_pinn)` 聚合多种子重复实验，用**指标均值**排序（`*_r2` 越大越好，其余越小越好）；`--aggregate single` 则直接按单次 run 排序；
+3. 胜出组内再取指标最好的那一次 run 的权重 —— 部署必须落到具体的一份权重上。
+
+> ⚠️ 跨场景比较不是同口径：`s0_full`（完整监测）天然比 `s2_severe`（严重稀疏）精度高，
+> 默认取全局最优等价于"挑最好测点条件下的模型"。部署到真实稀疏场景时应显式
+> `--scenario` 限定，否则服务的输入语义（哪些通道缺失）与训练场景不一致。
+> `--list` 在候选跨多个场景时会打印该提示。
+
+**输入编码必须与训练一致**，否则服务结果无法与离线指标对照（`serve/preprocess.py`）：通道顺序取 `processed.csv` 表头（去掉 `Time` 与目标信号），标准化用同一份 `scaler.npz`；缺失通道按 `missing_mode` 填哨兵值（默认 `raw_zero` = 原始域 0 的标准化值）；`missing_indicator=true` 时在末尾追加 34 条 0/1 观测指示通道。
+
+**接口一览**（`serve/server.py`，启动后见 `/docs`）：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/health` | 存活状态、当前模型名、推理设备、流式会话数 |
+| GET | `/model` | 当前服务的模型：run 名、场景配置、backbone / PINN / seed、选优指标与测试集指标 |
+| GET | `/schema` | 输入通道清单、窗口长度、缺失编码语义、目标信号、**数据要求**（可见比例 / 容差 / 违规处理） |
+| POST | `/predict` | 单窗口预测；带 `session_id` 时追加进滚动缓存，凑够一个窗口才出结果 |
+| POST | `/predict/batch` | 多窗口批量预测，逐窗口返回，失败项放进 `errors` 不影响其余结果 |
+| GET | `/sessions` | 流式会话的缓存长度 |
+| DELETE | `/sessions/{id}` | 清空某个会话缓存（换风机 / 断流重连时调用） |
+
+请求体中每个采样点是 `{通道名: 原始值}`；**通道缺省、值为 `null`、`NaN`、`inf` 均视为缺失**，服务会按训练时的语义编码，不会因为少传一个通道而报 400。
+
 ## 使用方式
 
 ```bash
@@ -206,4 +284,74 @@ python analyze_results.py --results_dir results/20260825104437_full_experiment
 
 # 多个实验目录合并分析，并可调整增益判定死区与输出路径
 python analyze_results.py --results_dir results/exp1 results/exp2 --tol 2 --out results/report.html
+
+# ---- 推理服务 ----
+pip install fastapi uvicorn                     # 仅服务需要，训练/分析不依赖
+
+# 服务加载 serve.yaml 里指定的权重，不做选优；换模型改配置里的 model.run_dir
+python -m serve.server --config serve.yaml      # 等价于 python -m serve.server
+python -m serve.server --checkpoint /path/to/other.pt --port 9000   # 命令行临时覆盖
+
+# 打印当前配置摘要（不启动服务）
+python -m serve.server --list
+
+# 端到端自检：取 processed.csv 末尾一个窗口反标准化回原始量纲，走完整链路（不起服务）
+python -m serve.server --check
+
+# 没有 serve.yaml 时才按指标选优（排行榜 / 指定场景或骨架）
+python -m serve.server --results-dir results --list --top 10
+python -m serve.server --results-dir results --scenario s2_severe --use-pinn true
+
+# 冒烟测试（另开终端，服务已启动；地址从 serve.yaml 解析，--url 可覆盖）
+python -m serve.client_example                        # 完整窗口一次性预测
+python -m serve.client_example --ratio 0.4            # 按训练场景只可见 40% 通道
+python -m serve.client_example --drop NAX1 NAX2 NAY1  # 模拟机舱加速度失效
+python -m serve.client_example --stream               # 逐点推送，演示滚动缓存预热
+```
+
+### 调用示例
+
+```bash
+# 服务元信息与输入契约
+curl http://127.0.0.1:8000/model
+curl http://127.0.0.1:8000/schema
+
+# 预测：samples 为按时间顺序排列的 window_size 个采样点，值是原始工程量纲
+curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d '{
+  "samples": [
+    {"PAB1": 12.3, "PAB2": 11.8, "PAB3": 12.1, "NAX1": 0.04, "WSN": 8.7, "YP": 213.5},
+    {"PAB1": 12.5, "PAB2": 12.0, "PAB3": 12.4, "NAX1": 0.05, "WSN": 8.9, "YP": 213.6}
+  ]
+}'
+```
+
+响应（节选）：
+
+```json
+{
+  "ready": true,
+  "status": "ok",
+  "physical":  {"TMBNS": 1234.5, "TMBEW": -210.3, "TMBTOR": 88.1},
+  "standardized": {"TMBNS": 0.31, "TMBEW": -0.42, "TMBTOR": 0.15},
+  "model": {"run_name": "s2_severe_transformer_pinn_seed2026", "scenario": "s2_severe",
+            "backbone": "transformer", "use_pinn": true, "seed": 2026},
+  "diagnostics": {"window_size": 100, "n_observed": 30, "n_missing": 4,
+                  "missing_channels": ["NAX1", "NAX2", "NAY1", "NAY2"]},
+  "warnings": []
+}
+```
+
+- `physical` 是原始工程量纲（可直接对接 SCADA / 报警阈值），`standardized` 可直接与该 run 的离线指标对照；
+- 样本不足（≥1 个但不够一个窗口）时返回 `ready=false` + `status=warming_up` 与 `buffer_length`，继续推即可；
+- `warnings` 会提示"输入可见通道数明显多于该稀疏场景训练时的典型值"这类分布不一致问题。
+
+不作为 Web 服务时，`serve/predictor.py` 可直接当库用：
+
+```python
+from serve.config import ServeConfig
+from serve.predictor import BestModelPredictor
+
+p = BestModelPredictor.from_config(ServeConfig.from_yaml("serve.yaml"))
+out = p.predict(samples)      # samples: window_size 个 {通道名: 原始值}
+print(out["physical"])        # {"TMBNS": ..., "TMBEW": ..., "TMBTOR": ...}
 ```

@@ -1,0 +1,89 @@
+# 推理服务配置（serve/）
+#
+# 不做任何自动选优：服务只加载 model.checkpoint 指定的那一份权重。
+#   - model          只给一条路径（best_model.pt）；模型结构、场景、编码口径
+#                    由该权重所在目录 + 实验 config.yaml 还原
+#   - data           输入数据契约：通道清单 + 数据要求（可见比例 / 失效通道 / 违规处理），
+#                    启动时与训练口径核对，避免"输入分布与训练不一致"
+#   - preprocessing  训练时的编码链路，启动时与实验 config.yaml 核对，不一致直接报错退出
+#
+# 启动：python -m serve.server --config serve.yaml
+# 自检：python -m serve.server --config serve.yaml --check
+
+model:
+  # 唯一必填：权重文件路径（换模型只改这一行）
+  checkpoint: results/20260916064037_100hz_full/s2_severe_transformer_pinn_seed2026/best_model.pt
+
+  # 可选：还原模型结构用的实验 config.yaml；null = 从上面那个目录向上自动查找。
+  # 只有把 .pt 单独拷到别处、脱离 results/ 目录树时才需要显式指定。
+  config_file: null
+
+data:
+  # 通道顺序与标准化 scaler 的来源（同目录下需有 scaler.npz）
+  processed_file: data/processed/B1_CL4_100/processed.csv
+
+  # 输入通道清单，顺序即模型输入顺序（= processed.csv 表头去掉 Time 与目标信号）。
+  # 启动时会与 processed.csv 核对，不一致直接退出 —— 防止"模型要 34 路、线上只给 20 路"。
+  input_channels:
+    - PAB1
+    - PAB2
+    - PAB3
+    - B1POS
+    - B2POS
+    - B3POS
+    - RST2
+    - YP
+    - NAX1
+    - NAX2
+    - NAY1
+    - NAY2
+    - NAZ1
+    - NAZ2
+    - XTurbSpeed1
+    - TurbSpeed2
+    - GTEMP1
+    - GTEMP4
+    - WS30
+    - WD30
+    - WSN
+    - WDN
+    - AIRTN
+    - AIRHNA
+    - GenTorqSP
+    - DCCREF
+    - DCC
+    - DCV
+    - PwrPercent
+    - OptRpm
+    - WindEst
+    - MaxPwrEst
+    - Fgrid
+    - Pwaste
+
+  target_signals: [TMBNS, TMBEW, TMBTOR]
+
+  # 输入必须是原始工程量纲（与 data/raw 一致），服务内部完成标准化；
+  # 不要传标准化后的 z 值，也不要传别的风机 / 别的采样率的数据。
+  units: raw
+
+  # ---- 数据要求：调用方必须按这一节给数据，否则视为输入分布不一致 ----
+  requirements:
+    scenario: s2_severe        # 训练场景，与权重所在 run 不一致时启动报错
+    observable_ratio: 0.4      # 典型可见通道比例：34 × 0.4 ≈ 14 路可见，其余按缺失编码
+    tolerance: 1.2             # 可见通道数偏离 ±20% 即判为分布不一致
+    blocked: []                # 训练时永久失效的通道（即使传了值也按缺失处理）
+    on_violation: warn         # warn = 结果里带 warnings；reject = 直接返回 400
+
+preprocessing:
+  # 与训练时完全一致，启动时与实验 config.yaml 核对：
+  # strict=true（默认）时不一致直接退出，strict=false 只告警（结果不可与离线指标对照）
+  strict: true
+  window_size: 100             # 一个窗口的采样点数（100 Hz → 1 秒）
+  missing_mode: raw_zero       # 缺失 = 原始域 0 的标准化值（等价于断线测点读到 0）
+  missing_indicator: true      # 末尾追加 34 条 0/1 观测指示通道
+
+server:
+  host: 127.0.0.1              # 对外暴露用 0.0.0.0
+  port: 8000
+  device: null                 # null = 自动（cuda 可用则用 cuda，否则 cpu）；可填 cpu / cuda / cuda:1
+  base_url: null               # 客户端脚本用的地址；null = http://{host}:{port}
