@@ -1,0 +1,84 @@
+# 数据处理阶段配置（raw -> processed）
+#
+# 本文件只负责“把原始 CSV 清洗、选点、标准化并落盘”，与训练配置 config.yaml 完全解耦。
+# 一次运行可同时产出多个采样率版本（20 Hz / 100 Hz），各自写入独立目录、互不覆盖；
+# 训练侧只需在 config.yaml 的 `data.processed_file` 里指向其中一份即可。
+#
+# 用法：
+#   python preprocessing/prepare_data.py                      # 处理全部版本
+#   python preprocessing/prepare_data.py --dataset b1_cl4_100  # 只处理指定版本
+
+# 原始数据目录（相对项目根目录，或绝对路径）
+raw_dir: "data/raw"
+
+# 传感器规格元数据：用于按 "Reliable Measurement" 过滤不可靠测点
+metadata_file: "Bjorko_Sensors_Specs_Metadata.csv"
+
+# 目标信号：塔底结构响应，作为训练标签；这些列会写入每个 processed 版本
+target_signals:
+  - "TMBNS"
+  - "TMBEW"
+  - "TMBTOR"
+
+# 输入通道候选（实际可用通道还会再按 metadata 过滤掉不可靠测点）
+input_signals:
+  # Hub and Blades
+  - "PAB1"          # Pitch angle blade 1
+  - "PAB2"          # Pitch angle blade 2
+  - "PAB3"          # Pitch angle blade 3
+  - "B1POS"         # Blade 1 position
+  - "B2POS"         # Blade 2 position
+  - "B3POS"         # Blade 3 position
+  # Shaft
+  - "RST2"          # Shaft torque
+  # Nacelle
+  - "YP"            # Yaw position
+  - "NAX1"          # Nacelle accel. x
+  - "NAX2"          # Nacelle accel. x
+  - "NAY1"          # Nacelle accel. y
+  - "NAY2"          # Nacelle accel. y
+  - "NAZ1"          # Nacelle accel. z
+  - "NAZ2"          # Nacelle accel. z
+  # Rotor / Turbine speed
+  - "XTurbSpeed1"
+  - "TurbSpeed2"
+  # Generator
+  - "GTEMP1"
+  - "GTEMP4"
+  # Meteorological mast / Nacelle environment
+  - "WS30"          # Wind speed (30 m)
+  - "WD30"          # Wind direction (30 m)
+  - "WSN"           # Wind speed (nacelle)
+  - "WDN"           # Wind direction (nacelle)
+  - "AIRTN"         # Air temperature (nacelle)
+  - "AIRHNA"        # Air humidity (nacelle)
+  # Control / Grid
+  - "GenTorqSP"     # Generator torque setpoint
+  - "DCCREF"        # DC current reference
+  - "DCC"           # DC current
+  - "DCV"           # DC voltage
+  - "PwrPercent"    # Power percentage
+  - "OptRpm"        # Optimal rpm
+  - "WindEst"       # Estimated wind speed
+  - "MaxPwrEst"     # Max power estimate
+  - "Fgrid"         # Grid frequency
+  - "Pwaste"        # Power waste
+
+# 清洗策略
+clean:
+  drop_all_na: true     # 删除整行为空的样本
+  remove_inf: true      # ±inf -> NaN
+  ffill: true           # 前向填充
+  bfill: true           # 后向填充（补齐开头缺失）
+
+# 需要产出的 processed 版本：20 Hz 与 100 Hz 各一份
+# out_dir 下会生成 processed.csv / scaler.npz / meta.yaml 三个文件
+datasets:
+  - name: "b1_cl4_20"
+    description: "20 Hz 采样，2022-07 ~ 2023-08，时间覆盖更全"
+    input_file: "B1_CL4_20.csv"
+    out_dir: "data/processed/B1_CL4_20"
+  - name: "b1_cl4_100"
+    description: "100 Hz 采样，2022-07 ~ 2023-06，时域分辨率更高"
+    input_file: "B1_CL4_100.csv"
+    out_dir: "data/processed/B1_CL4_100"

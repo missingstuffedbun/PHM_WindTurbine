@@ -1,19 +1,21 @@
-# 数据路径
+# 输出路径
 paths:
-  raw_dir: "data/raw"
-  processed_dir: "data/processed"
   results_dir: "results"
   model_dir: "results/models"
   metrics_dir: "results/metrics"
   figures_dir: "results/figures"
 
-# 数据预处理
-preprocessing:
-  target_signals:
-    - "TMBNS"
-    - "TMBEW"
-    - "TMBTOR"
+# 训练数据来源：直接读取数据处理阶段产出的文件
+# 数据的清洗 / 选点 / 标准化由 process.yaml 驱动（python preprocessing/prepare_data.py），
+# 产出 20 Hz 与 100 Hz 两个版本；这里按需切换即可，无需重新处理数据。
+#   data/processed/B1_CL4_20/processed.csv    # 20 Hz（默认，时间覆盖更全）
+#   data/processed/B1_CL4_100/processed.csv   # 100 Hz（时域分辨率更高）
+# 目标信号（TMBNS / TMBEW / TMBTOR）从同目录的 meta.yaml 自动读取，无需在此重复声明。
+data:
+  processed_file: "data/processed/B1_CL4_100/processed.csv"
 
+# 数据集构建
+preprocessing:
   window_size: 100
   stride: 10
   train_ratio: 0.7
@@ -67,7 +69,7 @@ training:
   lr: 0.001
   weight_decay: 0.0001
   early_stopping_patience: 10
-  device: "cpu"  # 可选: cuda, cpu
+  device: "cuda"  # 可选: cuda, cpu（cuda 不可用时自动回退 cpu）
 
 # 损失函数权重
 loss:
@@ -82,5 +84,7 @@ metrics:
   - "mape"
   - "r2"
 
-# 随机种子
-seed: [42, 2026, 0916]
+# 随机种子（单个值或列表）
+# 列表 = 重复实验：每个 seed 会把上面所有 (场景 × backbone × use_pinn) 组合完整跑一遍，
+# 输出目录自动附加 _seed{seed} 后缀，分析脚本按 (scenario, backbone, use_pinn) 聚合多次结果。
+seed: [42, 2026, 916]

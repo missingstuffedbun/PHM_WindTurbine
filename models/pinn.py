@@ -7,12 +7,16 @@ from models.physics import physics_loss, PhysicsConstraints
 class PINNWrapper(nn.Module):
     """物理约束包装器：将任意 backbone 模型转换为 PINN。"""
 
-    def __init__(self, config):
+    def __init__(self, config, scaler=None):
         super().__init__()
         self.backbone = build_model(config)
-        self.target_names = config["preprocessing"]["target_signals"]
+        # 目标信号：优先 processing 段落（main.py 已注入），回退到 data 段落
+        self.target_names = ((config.get("preprocessing") or {}).get("target_signals")
+                             or (config.get("data") or {}).get("target_signals"))
         self.feature_names = []  # 在训练时从 dataset 传入
-        self.phys_module = PhysicsConstraints()
+        # scaler：物理约束需在原始域做矢量旋转与平方，由 main.py 从 processed
+        # 目录的 scaler.npz 加载后注入；为 None 时弯矩约束自动跳过。
+        self.phys_module = PhysicsConstraints(scaler=scaler)
 
     def forward(self, x):
         return self.backbone(x)

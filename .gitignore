@@ -38,8 +38,7 @@ ENV/
 # Data and results
 data/raw/*
 !data/raw/Bjorko_Sensors_Specs_Metadata.csv
-data/processed/*.csv
-data/processed/*.npz
+data/processed/*
 results/*
 
 # OS

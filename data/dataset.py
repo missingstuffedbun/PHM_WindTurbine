@@ -4,10 +4,24 @@ import warnings
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 from torch.utils.data import Dataset
 
 # 稀疏屏蔽层级：按通道 / 按时间点 / 按时间段整段置空
 SPARSE_LEVELS = ("channel", "timestep", "segment")
+
+
+def load_processed_meta(data_path):
+    """读取 processed 数据同目录下的 meta.yaml（由 preprocessing/prepare_data.py 生成）。
+
+    其中记录了该版本的目标信号 / 输入信号 / 来源文件等，训练侧据此确定标签列，
+    避免在 config.yaml 中重复声明。文件不存在时返回空字典。
+    """
+    meta_path = os.path.join(os.path.dirname(os.path.abspath(data_path)), "meta.yaml")
+    if not os.path.exists(meta_path):
+        return {}
+    with open(meta_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
 class WindTurbineDataset(Dataset):

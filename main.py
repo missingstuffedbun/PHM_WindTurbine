@@ -10,8 +10,9 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from data.dataset import build_split_datasets
+from data.dataset import build_split_datasets, load_processed_meta
 from models.base import build_model
+from models.physics import load_scaler
 from models.pinn import PINNWrapper
 from utils.metrics import compute_metrics
 from utils.visualize import plot_predictions, plot_scatter, plot_error_distribution
@@ -52,6 +53,44 @@ def load_scenarios(config, config_path):
     )
 
 
+def resolve_processed_file(config, config_path):
+    """确定本次训练直接读取的 processed 数据文件。
+
+    `data.processed_file` 指向数据处理阶段（process.yaml）产出的文件，
+    相对路径按 config.yaml 所在目录解析；兼容旧格式 `paths.processed_dir`。
+    """
+    base_dir = os.path.dirname(os.path.abspath(config_path))
+    processed_file = (config.get("data") or {}).get("processed_file")
+
+    if not processed_file:
+        legacy_dir = (config.get("paths") or {}).get("processed_dir")
+        if legacy_dir:
+            processed_file = os.path.join(legacy_dir, "processed.csv")
+        else:
+            raise ValueError(
+                "config.yaml 缺少 data.processed_file。请先运行 "
+                "`python preprocessing/prepare_data.py`（配置见 process.yaml），"
+                "再把产出的 processed.csv 路径填入 data.processed_file。"
+            )
+
+    if not os.path.isabs(processed_file):
+        processed_file = os.path.join(base_dir, processed_file)
+    return processed_file
+
+
+def resolve_target_signals(config, processed_file):
+    """确定目标信号：优先 config.data.target_signals，否则读 processed 目录的 meta.yaml。"""
+    targets = (config.get("data") or {}).get("target_signals")
+    if not targets:
+        targets = load_processed_meta(processed_file).get("target_signals")
+    if not targets:
+        raise ValueError(
+            f"无法确定目标信号：{processed_file} 同目录缺少 meta.yaml，"
+            "且 config.yaml 未设置 data.target_signals。"
+        )
+    return list(targets)
+
+
 def to_list(value):
     """将配置中的单个值或列表统一为列表。"""
     if isinstance(value, list):
@@ -85,11 +124,16 @@ def create_experiment_root(base_dir, experiment_name=None):
     return root_dir
 
 
-def create_run_dir(root_dir, scenario_name, backbone, use_pinn):
-    """创建单次（scenario, backbone, use_pinn）实验的子目录。"""
+def create_run_dir(root_dir, scenario_name, backbone, use_pinn, seed=None, multi_seed=False):
+    """创建单次（scenario, backbone, use_pinn[, seed]）实验的子目录。
+
+    多种子重复实验时附加 `_seed{seed}` 后缀，避免不同 seed 的结果互相覆盖。
+    """
     folder_name = f"{scenario_name}_{backbone}"
     if use_pinn:
         folder_name += "_pinn"
+    if multi_seed and seed is not None:
+        folder_name += f"_seed{seed}"
     out_dir = os.path.join(root_dir, folder_name)
     os.makedirs(out_dir, exist_ok=True)
     return out_dir
@@ -172,13 +216,15 @@ def evaluate(model, loader, config, target_names, is_pinn=False, device=None):
 
 
 def run_single_experiment(config, scenarios_dict, scenario_name, backbone, use_pinn,
-                          device, root_dir, config_path):
-    """运行单个（scenario, backbone, use_pinn）组合的实验。"""
-    set_seed(config["seed"])
+                          seed, device, root_dir, config_path, multi_seed=False):
+    """运行单个（scenario, backbone, use_pinn, seed）组合的实验。"""
+    set_seed(seed)
 
-    out_dir = create_run_dir(root_dir, scenario_name, backbone, use_pinn)
+    out_dir = create_run_dir(root_dir, scenario_name, backbone, use_pinn,
+                             seed=seed, multi_seed=multi_seed)
     print(f"\n{'='*60}")
-    print(f"Scenario: {scenario_name} | Backbone: {backbone} | PINN: {use_pinn}")
+    print(f"Scenario: {scenario_name} | Backbone: {backbone} | "
+          f"PINN: {use_pinn} | Seed: {seed}")
     print(f"Output directory: {out_dir}")
     print(f"{'='*60}")
 
@@ -187,8 +233,9 @@ def run_single_experiment(config, scenarios_dict, scenario_name, backbone, use_p
     print(f"Scenario description: {scenario.get('description', '')}")
 
     # 构建数据集：先按时间切三段连续区间（相邻区间之间留隔离带），再各自滑窗
-    data_path = os.path.join(config["paths"]["processed_dir"], "processed.csv")
-    target_signals = config["preprocessing"]["target_signals"]
+    # 数据已由 process.yaml 阶段处理好，这里直接读取对应文件
+    data_path = config["data"]["processed_file"]
+    target_signals = config["data"]["target_signals"]
     train_set, val_set, test_set, split_bounds = build_split_datasets(
         data_path=data_path,
         window_size=config["preprocessing"]["window_size"],
@@ -198,7 +245,7 @@ def run_single_experiment(config, scenarios_dict, scenario_name, backbone, use_p
         val_ratio=config["preprocessing"]["val_ratio"],
         gap=config["preprocessing"].get("split_gap"),
         scenario=scenario,
-        seed=config["seed"],
+        seed=seed,
         missing_mode=config["preprocessing"].get("missing_mode", "raw_zero"),
         missing_indicator=config["preprocessing"].get("missing_indicator", False),
     )
@@ -217,13 +264,18 @@ def run_single_experiment(config, scenarios_dict, scenario_name, backbone, use_p
     run_config["model"] = config["model"].copy()
     run_config["model"]["backbone"] = backbone
     run_config["model"]["use_pinn"] = use_pinn
+    # PINN 需要知道目标信号名，这里把已解析的结果注入（不污染原配置）
+    run_config["preprocessing"] = {**config["preprocessing"], "target_signals": target_signals}
 
     # 维度由数据推导（目标信号不进输入；开启 missing_indicator 时输入维度 ×2）
     check_or_set_dim(run_config["model"], "input_dim", train_set.model_input_dim)
     check_or_set_dim(run_config["model"], "output_dim", train_set.output_dim)
 
     if use_pinn:
-        model = PINNWrapper(run_config).to(device)
+        # 物理约束需在原始域做矢量旋转（TMBNS/TMBEW -> fore-aft/side-side）与
+        # 平方运算（ω²、V²），因此注入 processed 目录的标准化参数。
+        scaler = load_scaler(config["data"]["processed_file"])
+        model = PINNWrapper(run_config, scaler=scaler).to(device)
         model.feature_names = train_set.input_cols
         print(f"Model: {backbone} + PINN (input_dim={train_set.model_input_dim})")
     else:
@@ -300,32 +352,44 @@ def write_csv_summary(summary_path, records, fieldnames):
         writer.writerows(records)
 
 
-def main(config_path, scenario_names, experiment_name=None):
+def main(config_path, scenario_names, experiment_name=None, seeds=None):
     config = load_config(config_path)
     scenarios_dict = load_scenarios(config, config_path)
     device = torch.device(config["training"]["device"] if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # 展开模型配置组合
+    # 数据来源：直接读取数据处理阶段（process.yaml）产出的文件
+    config.setdefault("data", {})
+    config["data"]["processed_file"] = resolve_processed_file(config, config_path)
+    config["data"]["target_signals"] = resolve_target_signals(
+        config, config["data"]["processed_file"]
+    )
+    print(f"Processed data: {config['data']['processed_file']}")
+    print(f"Target signals: {config['data']['target_signals']}")
+
+    # 展开模型配置组合（与 backbone / use_pinn 一样，seed 也可以是列表）
     backbones = to_list(config["model"]["backbone"])
     use_pinns = to_list(config["model"]["use_pinn"])
+    # 命令行 --seed 优先，否则取 config.yaml 中的 seed（单个值或列表）
+    seeds = [int(s) for s in to_list(seeds if seeds else config["seed"])]
+    multi_seed = len(seeds) > 1
 
     # 创建一次实验的总输出目录
     os.makedirs(config["paths"]["results_dir"], exist_ok=True)
     root_dir = create_experiment_root(config["paths"]["results_dir"], experiment_name)
     print(f"\nExperiment root directory: {root_dir}")
 
-    # 保存本次实验的配置文件
-    shutil.copy(config_path, os.path.join(root_dir, "config.yaml"))
+    # 保存本次实验的配置副本（含已解析的数据路径与目标信号，便于复现与分析）
+    with open(os.path.join(root_dir, "config.yaml"), "w", encoding="utf-8") as f:
+        yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)
     scenarios_path = os.path.join(os.path.dirname(os.path.abspath(config_path)), "config", "scenarios.yaml")
     if os.path.exists(scenarios_path):
         shutil.copy(scenarios_path, os.path.join(root_dir, "scenarios.yaml"))
 
     summary_path = os.path.join(root_dir, "metrics_summary.csv")
 
-    records = []
     fieldnames = [
-        "timestamp", "scenario", "backbone", "use_pinn",
+        "timestamp", "scenario", "backbone", "use_pinn", "seed",
         "overall_rmse", "overall_mae", "overall_r2",
         "TMBNS_rmse", "TMBNS_r2",
         "TMBEW_rmse", "TMBEW_r2",
@@ -333,36 +397,42 @@ def main(config_path, scenario_names, experiment_name=None):
         "output_dir",
     ]
 
-    for scenario_name in scenario_names:
-        if scenario_name not in scenarios_dict:
-            raise ValueError(
-                f"未知场景: {scenario_name}。请在 config/scenarios.yaml 中定义。"
-            )
-        for backbone in backbones:
-            for use_pinn in use_pinns:
-                out_dir, metrics = run_single_experiment(
-                    config, scenarios_dict, scenario_name, backbone, use_pinn,
-                    device, root_dir, config_path
-                )
-                record = {
-                    "timestamp": datetime.now().strftime("%Y%m%d%H%M%S"),
-                    "scenario": scenario_name,
-                    "backbone": backbone,
-                    "use_pinn": use_pinn,
-                    "overall_rmse": metrics.get("overall_rmse", ""),
-                    "overall_mae": metrics.get("overall_mae", ""),
-                    "overall_r2": metrics.get("overall_r2", ""),
-                    "TMBNS_rmse": metrics.get("TMBNS_rmse", ""),
-                    "TMBNS_r2": metrics.get("TMBNS_r2", ""),
-                    "TMBEW_rmse": metrics.get("TMBEW_rmse", ""),
-                    "TMBEW_r2": metrics.get("TMBEW_r2", ""),
-                    "TMBTOR_rmse": metrics.get("TMBTOR_rmse", ""),
-                    "TMBTOR_r2": metrics.get("TMBTOR_r2", ""),
-                    "output_dir": out_dir,
-                }
-                records.append(record)
+    n_total = len(scenario_names) * len(backbones) * len(use_pinns) * len(seeds)
+    print(f"Total runs: {n_total} = {len(scenario_names)} scenarios "
+          f"× {len(backbones)} backbones × {len(use_pinns)} pinn settings "
+          f"× {len(seeds)} seeds ({seeds})")
 
-    write_csv_summary(summary_path, records, fieldnames)
+    for seed in seeds:
+        for scenario_name in scenario_names:
+            if scenario_name not in scenarios_dict:
+                raise ValueError(
+                    f"未知场景: {scenario_name}。请在 config/scenarios.yaml 中定义。"
+                )
+            for backbone in backbones:
+                for use_pinn in use_pinns:
+                    out_dir, metrics = run_single_experiment(
+                        config, scenarios_dict, scenario_name, backbone, use_pinn,
+                        seed, device, root_dir, config_path, multi_seed=multi_seed
+                    )
+                    record = {
+                        "timestamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+                        "scenario": scenario_name,
+                        "backbone": backbone,
+                        "use_pinn": use_pinn,
+                        "seed": seed,
+                        "overall_rmse": metrics.get("overall_rmse", ""),
+                        "overall_mae": metrics.get("overall_mae", ""),
+                        "overall_r2": metrics.get("overall_r2", ""),
+                        "TMBNS_rmse": metrics.get("TMBNS_rmse", ""),
+                        "TMBNS_r2": metrics.get("TMBNS_r2", ""),
+                        "TMBEW_rmse": metrics.get("TMBEW_rmse", ""),
+                        "TMBEW_r2": metrics.get("TMBEW_r2", ""),
+                        "TMBTOR_rmse": metrics.get("TMBTOR_rmse", ""),
+                        "TMBTOR_r2": metrics.get("TMBTOR_r2", ""),
+                        "output_dir": out_dir,
+                    }
+                    write_csv_summary(summary_path, [record], fieldnames)
+
     print(f"\n{'='*60}")
     print(f"All experiments completed. Summary saved to: {summary_path}")
     print(f"{'='*60}")
@@ -382,6 +452,14 @@ if __name__ == "__main__":
         default=None,
         help="实验名称，用于生成总输出目录，例如：--name exp_v1",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        nargs="+",
+        default=None,
+        help="随机种子（可多个），覆盖 config.yaml 中的 seed；"
+             "多个 seed 表示重复实验，例如：--seed 42 2026 916",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -398,4 +476,4 @@ if __name__ == "__main__":
     if not scenario_names:
         raise ValueError("未指定任何场景。请在 config.yaml 或命令行中指定。")
 
-    main(args.config, scenario_names, experiment_name=args.name)
+    main(args.config, scenario_names, experiment_name=args.name, seeds=args.seed)

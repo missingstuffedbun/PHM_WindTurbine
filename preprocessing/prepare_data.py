@@ -1,10 +1,35 @@
-import os
-import re
+"""数据处理阶段：raw -> processed。
+
+读取 `process.yaml`，对其中声明的每个版本（20 Hz / 100 Hz）分别执行
+「选点 -> 按 metadata 过滤不可靠测点 -> 清洗 -> 标准化」，产出：
+
+    <out_dir>/processed.csv   # 标准化后的数据（含 Time / 输入通道 / 目标通道）
+    <out_dir>/scaler.npz      # 标准化参数（mean / scale / columns），供数据侧还原原始域
+    <out_dir>/meta.yaml       # 该版本的元信息（来源文件、行数、目标信号等）
+
+训练侧不再做任何数据处理，只在 config.yaml 的 `data.processed_file` 里指向产出的
+processed.csv 即可（目标信号会从同目录的 meta.yaml 读取）。
+"""
+
 import argparse
+import os
 
 import numpy as np
 import pandas as pd
+import yaml
 from sklearn.preprocessing import StandardScaler
+
+DEFAULT_PROCESS = "process.yaml"
+
+
+def load_process_config(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def resolve_path(path, base_dir):
+    """相对路径按 base_dir 解析，绝对路径原样返回。"""
+    return path if os.path.isabs(path) else os.path.join(base_dir, path)
 
 
 def load_metadata(meta_path):
@@ -15,82 +40,51 @@ def load_metadata(meta_path):
     return mapping
 
 
-def find_raw_csvs(raw_dir):
-    """查找 raw 目录下所有工况 CSV 文件。
-
-    优先返回 20 Hz 文件（B1_CL4_20.csv），因为其数据量更大、时间覆盖更全。
-    """
-    files = []
-    priority_file = None
-    for f in os.listdir(raw_dir):
-        if not f.endswith(".csv") or f == "Bjorko_Sensors_Specs_Metadata.csv":
-            continue
-        fpath = os.path.join(raw_dir, f)
-        if f == "B1_CL4_20.csv":
-            priority_file = fpath
-        else:
-            files.append(fpath)
-
-    if priority_file:
-        return [priority_file] + files
-    return files
-
-
-def select_signals(df, reliability_map):
-    """根据 sensor 配置和 metadata 选择可靠信号。"""
-    # 目标输出：塔底结构响应
-    targets = ["TMBNS", "TMBEW", "TMBTOR"]
-
-    # 按 sensor 配置选择输入信号
-    inputs = [
-        # Hub and Blades
-        "PAB1", "PAB2", "PAB3",          # Pitch angles x 3
-        "B1POS", "B2POS", "B3POS",       # Blade positions
-        # Shaft
-        "RST2",                           # Shaft torque
-        # Nacelle
-        "YP",                             # Yaw position
-        "NAX1", "NAX2", "NAY1", "NAY2", "NAZ1", "NAZ2",  # Accelerometers x,y,z
-        # Rotor / Turbine speed
-        "XTurbSpeed1", "TurbSpeed2",
-        # Generator
-        "GTEMP1", "GTEMP4",
-        # Meteorological mast / Nacelle environment
-        "WS30", "WD30", "WSN", "WDN",
-        "AIRTN", "AIRHNA",
-        # Control / Grid
-        "GenTorqSP", "DCCREF", "DCC", "DCV",
-        "PwrPercent", "OptRpm", "WindEst", "MaxPwrEst",
-        "Fgrid", "Pwaste",
-    ]
-
-    selected = ["Time"] + inputs + targets
+def select_signals(df, reliability_map, input_signals, target_signals):
+    """按配置选择输入/目标信号，并过滤 metadata 中标记为不可靠的测点。"""
+    selected = ["Time"] + list(input_signals) + list(target_signals)
     selected = [s for s in selected if s in df.columns]
 
     # 过滤 metadata 中标记为不可靠的信号
     reliable = [s for s in selected if reliability_map.get(s, True) is True]
 
-    return df[reliable].copy(), reliable
+    # 去重但保持顺序
+    seen, ordered = set(), []
+    for s in reliable:
+        if s not in seen:
+            seen.add(s)
+            ordered.append(s)
+
+    available_targets = [s for s in target_signals if s in ordered]
+    missing_targets = [s for s in target_signals if s not in ordered]
+    if missing_targets:
+        raise ValueError(
+            f"目标信号 {missing_targets} 不在可用列中，请检查 target_signals / metadata。"
+        )
+    return df[ordered].copy(), ordered
 
 
-def clean_data(df):
-    """基础清洗：删除全空行、用前后向填充处理缺失值。"""
-    df = df.dropna(how="all")
-    df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.ffill().bfill()
+def clean_data(df, clean_cfg):
+    """基础清洗：删除全空行、处理 inf、前后向填充缺失值。"""
+    clean_cfg = clean_cfg or {}
+    if clean_cfg.get("drop_all_na", True):
+        df = df.dropna(how="all")
+    if clean_cfg.get("remove_inf", True):
+        df = df.replace([np.inf, -np.inf], np.nan)
+    if clean_cfg.get("ffill", True):
+        df = df.ffill()
+    if clean_cfg.get("bfill", True):
+        df = df.bfill()
     return df
 
 
-def normalize_and_save(df, out_dir, scaler=None, fit=True):
-    """对数值列做标准化，保存数据与 scaler 参数。"""
+def normalize_and_save(df, out_dir, meta):
+    """对数值列做标准化，保存数据、scaler 参数与元信息。"""
     feature_cols = [c for c in df.columns if c != "Time"]
 
     values = df[feature_cols].values
-    if fit or scaler is None:
-        scaler = StandardScaler()
-        scaled = scaler.fit_transform(values)
-    else:
-        scaled = scaler.transform(values)
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(values)
 
     df_out = df.copy()
     df_out[feature_cols] = scaled
@@ -103,35 +97,89 @@ def normalize_and_save(df, out_dir, scaler=None, fit=True):
         scale=scaler.scale_,
         columns=np.array(feature_cols),
     )
+    with open(os.path.join(out_dir, "meta.yaml"), "w", encoding="utf-8") as f:
+        yaml.safe_dump(meta, f, allow_unicode=True, sort_keys=False)
     return scaler
 
 
-def main(raw_dir, out_dir):
-    meta_path = os.path.join(raw_dir, "Bjorko_Sensors_Specs_Metadata.csv")
+def process_dataset(process_cfg, dataset_cfg, base_dir):
+    """处理单个版本（一个采样率），返回其 meta 字典。"""
+    name = dataset_cfg["name"]
+    raw_dir = resolve_path(process_cfg["raw_dir"], base_dir)
+    meta_file = process_cfg.get("metadata_file", "Bjorko_Sensors_Specs_Metadata.csv")
+    meta_path = resolve_path(os.path.join(raw_dir, meta_file), base_dir)
+    data_path = resolve_path(os.path.join(raw_dir, dataset_cfg["input_file"]), base_dir)
+    out_dir = resolve_path(dataset_cfg["out_dir"], base_dir)
+
+    print(f"\n{'='*60}")
+    print(f"[{name}] {dataset_cfg.get('description', '')}")
+    print(f"Source : {data_path}")
+    print(f"Output : {out_dir}")
+    print(f"{'='*60}")
+
+    if not os.path.exists(data_path):
+        raise FileNotFoundError(f"未找到原始数据文件: {data_path}")
+
     reliability_map = load_metadata(meta_path)
 
-    csv_files = find_raw_csvs(raw_dir)
-    if not csv_files:
-        raise FileNotFoundError(f"No raw CSV files found in {raw_dir}")
-
-    # 目前只处理单个文件；多个文件可在此拼接
-    data_path = csv_files[0]
-    print(f"Processing: {data_path}")
-
     df = pd.read_csv(data_path)
-    df, selected_signals = select_signals(df, reliability_map)
-    print(f"Selected signals: {selected_signals}")
+    raw_rows = len(df)
+    df, selected_signals = select_signals(
+        df, reliability_map,
+        process_cfg.get("input_signals", []),
+        process_cfg.get("target_signals", []),
+    )
+    print(f"Selected signals ({len(selected_signals)}): {selected_signals}")
 
-    df = clean_data(df)
-    print(f"Cleaned data shape: {df.shape}")
+    df = clean_data(df, process_cfg.get("clean"))
+    print(f"Rows: raw={raw_rows} -> cleaned={len(df)}")
 
-    scaler = normalize_and_save(df, out_dir, fit=True)
+    meta = {
+        "name": name,
+        "description": dataset_cfg.get("description", ""),
+        "source_file": os.path.relpath(data_path, base_dir),
+        "rows": int(len(df)),
+        "raw_rows": int(raw_rows),
+        "columns": [c for c in df.columns if c != "Time"],
+        "input_signals": [s for s in selected_signals
+                          if s not in set(process_cfg.get("target_signals", [])) and s != "Time"],
+        "target_signals": list(process_cfg.get("target_signals", [])),
+    }
+    normalize_and_save(df, out_dir, meta)
     print(f"Saved processed data to: {out_dir}")
+    return meta
+
+
+def main(process_path, only=None):
+    process_path = os.path.abspath(process_path)
+    base_dir = os.path.dirname(process_path)
+    process_cfg = load_process_config(process_path)
+
+    datasets = process_cfg.get("datasets", [])
+    if not datasets:
+        raise ValueError(f"{process_path} 中未定义任何 datasets 条目。")
+
+    if only:
+        wanted = set(only)
+        datasets = [d for d in datasets if d["name"] in wanted]
+        unknown = wanted - {d["name"] for d in datasets}
+        if unknown:
+            raise ValueError(f"process.yaml 中不存在的数据集: {sorted(unknown)}")
+
+    metas = [process_dataset(process_cfg, d, base_dir) for d in datasets]
+
+    print(f"\n{'='*60}")
+    print("全部数据处理完成：")
+    for m in metas:
+        print(f"  - {m['name']}: {m['rows']} 行 -> {m['source_file']}")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--raw_dir", default="data/raw")
-    parser.add_argument("--out_dir", default="data/processed")
+    parser = argparse.ArgumentParser(description="按 process.yaml 处理原始数据")
+    parser.add_argument("--process", default=DEFAULT_PROCESS,
+                        help="数据处理配置文件路径（默认 process.yaml）")
+    parser.add_argument("--dataset", nargs="+", default=None,
+                        help="只处理指定版本，例如：--dataset b1_cl4_20")
     args = parser.parse_args()
-    main(args.raw_dir, args.out_dir)
+    main(args.process, only=args.dataset)

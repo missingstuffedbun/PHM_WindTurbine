@@ -10,6 +10,7 @@
 
 import csv
 import os
+import re
 import statistics
 from datetime import datetime
 
@@ -45,10 +46,20 @@ def discover_run_dirs(root):
     return sorted(run_dirs)
 
 
+SEED_SUFFIX = re.compile(r"_seed\d+$")
+
+
+def parse_seed(name):
+    """从 run 目录名解析 seed（多种子重复实验目录带 `_seed{seed}` 后缀）。"""
+    match = SEED_SUFFIX.search(name)
+    return int(match.group(0)[len("_seed"):]) if match else None
+
+
 def parse_run_name(name, scenario_names=()):
-    """从 run 目录名解析 (scenario, backbone, use_pinn)。"""
-    use_pinn = name.endswith("_pinn")
-    core = name[:-5] if use_pinn else name
+    """从 run 目录名解析 (scenario, backbone, use_pinn)，忽略 seed 后缀。"""
+    core = SEED_SUFFIX.sub("", name)
+    use_pinn = core.endswith("_pinn")
+    core = core[:-5] if use_pinn else core
 
     for s in sorted(scenario_names, key=len, reverse=True):
         if core == s or core.startswith(s + "_"):
@@ -140,7 +151,10 @@ def collect_runs(roots):
 
     for root in roots:
         root_cfg = load_yaml(os.path.join(root, "config.yaml")) or {}
-        targets = (root_cfg.get("preprocessing") or {}).get("target_signals") or DEFAULT_TARGETS
+        # 目标信号：新格式在 data.target_signals（main.py 已解析写入），兼容旧的 preprocessing
+        targets = ((root_cfg.get("data") or {}).get("target_signals")
+                   or (root_cfg.get("preprocessing") or {}).get("target_signals")
+                   or DEFAULT_TARGETS)
         meta_map = load_run_meta(root)
 
         for run_dir in discover_run_dirs(root):
@@ -162,6 +176,7 @@ def collect_runs(roots):
                 "scenario": scenario,
                 "backbone": backbone,
                 "use_pinn": bool(use_pinn),
+                "seed": parse_seed(run_name),
                 "metrics": metrics,
                 "images": [n for n in ("prediction_comparison.png", "scatter.png",
                                        "error_distribution.png")
@@ -192,6 +207,7 @@ def group_runs(runs):
         grouped[key] = {
             "n": len(items),
             "run_names": [it["run_name"] for it in items],
+            "seeds": [it.get("seed") for it in items],
             "metrics": {k: _agg([it["metrics"][k] for it in items if k in it["metrics"]])
                         for k in keys},
         }
